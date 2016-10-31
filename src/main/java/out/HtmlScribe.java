@@ -3,9 +3,16 @@ package out;
 import statistical.BCubed;
 import statistical.Blanc;
 import statistical.Score;
-import structures.*;
+import structures.Caption;
+import structures.Chain;
+import structures.Document;
+import structures.Mention;
+import utilities.Util;
 
-import java.util.*;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**The HtmlScribe houses functions for outputting webpages to
  * showcase the data.
