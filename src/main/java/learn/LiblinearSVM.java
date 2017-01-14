@@ -234,12 +234,12 @@ public class LiblinearSVM
         return Linear.predictProbability(_model, instance, probabilities);
     }
 
-    public void evaluate(String filename)
+    public ScoreDict<Integer> evaluate(String filename)
     {
-        evaluate_excludeIDs(filename, new HashSet<>());
+        return evaluate_excludeIDs(filename, new HashSet<>());
     }
 
-    public void evaluate_excludeIDs(String filename, Collection<String> ignoredIDs)
+    public ScoreDict<Integer> evaluate_excludeIDs(String filename, Collection<String> ignoredIDs)
     {
         int numVectors = 0;
         Logger.log("Getting num vectors from file");
@@ -274,8 +274,6 @@ public class LiblinearSVM
             Logger.log(ioEx);
         }
 
-        System.out.println("Pos: " + scoreDict.getScore(1).toScoreString());
-        System.out.println("Neg: " + scoreDict.getScore(0).toScoreString());
-        System.out.println("Acc: " + scoreDict.getAccuracy() + " (of "+ scoreDict.getTotalGold() + ")");
+        return scoreDict;
     }
 }

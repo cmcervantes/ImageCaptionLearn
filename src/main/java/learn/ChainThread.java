@@ -32,12 +32,10 @@ public class ChainThread extends Thread
 	private List<String> _debugOutList;
 	private Collection<Mention> _mentionSet;
     private Set<Chain> _predChainSet;
-    private ChainClassifier.InferenceType _infType;
     private BinaryClassifierScoreDict _scoreDict;
     private String _docID;
 
 	public ChainThread(Collection<Mention> mentionSet, double confThresh,
-                       ChainClassifier.InferenceType infType,
 					   BinaryClassifierScoreDict scoreDict)
 	{
         _mentionSet = mentionSet;
@@ -47,7 +45,6 @@ public class ChainThread extends Thread
             break;
         }
 		_confThresh = confThresh;
-        _infType = infType;
         if(scoreDict == null)
             _scoreDict = new BinaryClassifierScoreDict();
         else
@@ -56,13 +53,6 @@ public class ChainThread extends Thread
 		_debugOutList = new ArrayList<>();
 	}
 
-	public void run()
-	{
-        switch(_infType){
-            case GREEDY: inference_greedy();
-                break;
-        }
-	}
 
     /**Runs the thread using the following predicted chain
      * inference logic:

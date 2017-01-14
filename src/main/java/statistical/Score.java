@@ -128,7 +128,7 @@ public class Score
      */
     public String toLatexString()
     {
-        return String.format("%.2f\\%% & %.2f\\%% & %.2f\\%% \\\\",
+        return String.format("%.2f\\%% & %.2f\\%% & %.2f\\%%",
                              _precision * 100.0, _recall * 100.0,
                              _f1 * 100.0);
     }

@@ -46,7 +46,13 @@ public class FeatureVector
         Collections.sort(indexList);
         return indexList;
     }
-    public Double getFeatureValue(int idx) {return _featureValueDict.get(idx);}
+
+    public Double getFeatureValue(int idx)
+    {
+        if(_featureValueDict.containsKey(idx))
+            return _featureValueDict.get(idx);
+        return 0.0;
+    }
 
     @Override
     public String toString()
@@ -61,7 +67,7 @@ public class FeatureVector
         else if(label == -1)
             sb.append("-1");
         else
-            sb.append(label);
+            sb.append((int)label);
 
         //and the featureIdx:value pairs
         for(Integer idx : _featureValueDict.keySet()){

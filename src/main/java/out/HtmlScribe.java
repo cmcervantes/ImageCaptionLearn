@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static utilities.HtmlIO.getImgHtm;
+
 /**The HtmlScribe houses functions for outputting webpages to
  * showcase the data.
  * 
@@ -26,7 +28,7 @@ public class HtmlScribe
 	private static String imgSrcRoot = 
 			"http://shannon.cs.illinois.edu/"+
 			"DenotationGraph/graph/flickr30k-images/";
-
+/*
     public static String getImgHtm(Document d)
     {
         //get the image source
@@ -74,7 +76,7 @@ public class HtmlScribe
         sb.append("</p>");
         sb.append("</td></tr></table></td>");
         return sb.toString();
-    }
+    }*/
 
     public static String getMultiImgPage(Collection<Document> docList)
     {

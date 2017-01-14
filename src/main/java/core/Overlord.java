@@ -1,19 +1,16 @@
 package core;
 
-import learn.ClassifyUtil;
-import learn.WekaMulticlass;
+import learn.*;
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.impl.Arguments;
 import net.sourceforge.argparse4j.inf.*;
 import net.sourceforge.argparse4j.internal.HelpScreenException;
 import net.sourceforge.argparse4j.internal.UnrecognizedArgumentException;
+import nlptools.WordnetUtil;
 import out.OutTable;
-import structures.Caption;
-import structures.Document;
-import structures.Mention;
-import utilities.DBConnector;
-import utilities.FileIO;
-import utilities.Logger;
+import statistical.ScoreDict;
+import structures.*;
+import utilities.*;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -51,14 +48,17 @@ public class Overlord
 	 */
 	public static void main(String[] args)
 	{
+        //debug();
+	    //System.exit(0);
+
         //start our runtime clock
 		Logger.startClock();
 
 		//arguments for the  manager
 		ArgumentParser parser = 
-				ArgumentParsers.newArgumentParser("PanOpt");
+				ArgumentParsers.newArgumentParser("ImageCaptionLearn");
 		parser.defaultHelp(true);
-		parser.description("The PanOpt application has several " +
+		parser.description("ImageCaptionLearn has several " +
                 "modules, each with their own args. To get " +
                 "more info on a particular module, specify " +
                 "the module with --help");
@@ -84,33 +84,35 @@ public class Overlord
                 "Exports a list of heterog subset pairs");
         setArgument_flag(debugParser.addArgument("--penult_filter"),
                 "Exports mention pairs for which the penult filter fires");
+        setArgument_flag(debugParser.addArgument("--mod_subset"),
+                "Exports newly modified subset features");
 
         /* Data Group */
         Subparser dataParser = subparsers.addParser("Data");
         setArgument(dataParser.addArgument("--convert_to_arff"),
                 "Converts the specified .feats file to .arff format",
                 "PATH");
-        String[] featOpts = {"pairwise", "affinity"};
+        String[] featOpts = {"pairwise", "affinity", "nonvis"};
         setArgument_opts(dataParser.addArgument("--extractFeats"), featOpts, null,
                 "Extracts features to --out");
-
-
 
         /* Learn Group */
         Subparser learnParser = subparsers.addParser("Learn");
         setArgument(learnParser.addArgument("--train_file"), "Training data", "PATH");
         setArgument(learnParser.addArgument("--model_file"), "Model file (save to / load from)", "PATH");
+        setArgument_flag(learnParser.addArgument("--inf"), "Pairwise identity inference");
         String[] learners = {"weka_multi", "liblinear_logistic"};
         setArgument_opts(learnParser.addArgument("--learner"), learners, "weka_multi",
                 "Specifies which training is taking place");
-        setArgument(learnParser.addArgument("batch_size"), "Specifies SIZE batches during training",
+        setArgument(learnParser.addArgument("--batch_size"), "train arg; uses SIZE batches",
                 Integer.class, 100, "SIZE", false);
-        setArgument(learnParser.addArgument("--epochs"), "Specifies NUM epochs",
+        setArgument(learnParser.addArgument("--epochs"), "train arg; run for NUM epochs",
                 Integer.class, 1000, "NUM", false);
         setArgument(learnParser.addArgument("--eval_file"), "Evaluation data", "PATH");
         setArgument_flag(learnParser.addArgument("--pronom_coref"),
-                "Evaluate rule-based pronominal coreference resolution");
-
+                "Evaluates rule-based pronominal coreference resolution");
+        setArgument(learnParser.addArgument("--nonvis_scores"), "inf arg; nonvisual scores", "FILE");
+        setArgument(learnParser.addArgument("--pairwise_scores"), "inf arg; pairwise identity scores", "FILE");
 
         //Actually parse the arguments
         Namespace ns = parseArgs(parser, args);
@@ -135,7 +137,6 @@ public class Overlord
                 docSet = DocumentLoader.getDocumentSet(conn, 2);
         }
 
-
         //Switch on the specified module, and parse module args
         List<String> argList = Arrays.asList(args);
         if(argList.contains("Debug")){
@@ -143,40 +144,264 @@ public class Overlord
                 Minion.export_subsetHeterogType(docSet);
             } else if(ns.getBoolean("penult_filter")){
                 Minion.export_penultFilter(docSet);
+            } else if(ns.getBoolean("mod_subset")){
+                Minion.export_modSubsetFeats(docSet, dataSplit);
             } else {
-                Map<String, Mention> mentionDict = new HashMap<>();
-                Map<String, Document> docDict = new HashMap<>();
+
+                DoubleDict<Integer> labelHist = new DoubleDict<>();
                 for(Document d : docSet){
-                    docDict.put(d.getID(), d);
-                    for(Caption c : d.getCaptionList()){
-                        for(Mention m : c.getMentionList()){
-                            mentionDict.put(m.getUniqueID(), m);
+                    Set<String> subsetPairs = d.getSubsetMentions();
+
+                    List<Mention> mentions = d.getMentionList();
+                    for(int i=0; i<mentions.size(); i++){
+                        Mention m_i = mentions.get(i);
+                        if(m_i.getChainID().equals("0"))
+                            continue;
+                        if(m_i.getPronounType() != Mention.PRONOUN_TYPE.NONE &&
+                           m_i.getPronounType() != Mention.PRONOUN_TYPE.SEMI)
+                            continue;
+
+                        for(int j=i+1; j<mentions.size(); j++){
+                            Mention m_j = mentions.get(j);
+
+                            if(m_j.getChainID().equals("0"))
+                                continue;
+                            if(m_j.getPronounType() != Mention.PRONOUN_TYPE.NONE &&
+                               m_j.getPronounType() != Mention.PRONOUN_TYPE.SEMI)
+                                continue;
+
+                            String id_ij = Document.getMentionPairStr(m_i, m_j, true, true);
+                            String id_ji = Document.getMentionPairStr(m_j, m_i, true, true);
+
+                            int label_ij = 0, label_ji = 0;
+                            if(m_i.getChainID().equals(m_j.getChainID())){
+                                label_ij = 1; label_ji = 1;
+                            }
+
+                            if(subsetPairs.contains(id_ij))
+                                label_ij = 2;
+                            if(subsetPairs.contains(id_ji))
+                                label_ji = 2;
+
+                            if(label_ij == 2 && label_ji == 2){
+                                System.out.println("------");
+                                System.out.println(m_i.toString() + "|" + m_j.toString());
+                                System.out.println(d.getCaption(m_i.getCaptionIdx()).toEntitiesString());
+                                System.out.println(d.getCaption(m_j.getCaptionIdx()).toEntitiesString());
+                            }
+
+                            if(label_ij == 2)
+                                label_ji = 3;
+                            else if(label_ji == 2)
+                                label_ij = 3;
+
+                            labelHist.increment(label_ij);
+                            labelHist.increment(label_ji);
                         }
                     }
                 }
 
-                String[] labels = {"null", "coref", "subset", "superset"};
-                List<String> mistakes =
-                        FileIO.readFile_lineList("/home/ccervan2/source/ImageCaptionLearn_py/pairwise_mistakes.csv");
-                OutTable ot = new OutTable("Gold", "Predicted", "m_1", "m_1_type", "m_2", "m_2_type", "Caption_1", "Caption_2");
-                for(int i=1; i<mistakes.size(); i++){
-                    String row = mistakes.get(i).trim();
-                    if(!row.isEmpty()){
-                        String[] cells = row.split(",");
-                        int gold = Integer.parseInt(cells[0]);
-                        int pred = Integer.parseInt(cells[1]);
-                        String mention_1 = cells[2];
-                        String mention_2 = cells[3];
-                        Mention m1 = mentionDict.get(mention_1);
-                        Mention m2 = mentionDict.get(mention_2);
-                        Caption c1 = docDict.get(m1.getDocID()).getCaption(m1.getCaptionIdx());
-                        Caption c2 = docDict.get(m2.getDocID()).getCaption(m2.getCaptionIdx());
-                        ot.addRow(labels[gold], labels[pred], m1.toString(),
-                                m1.getLexicalType(), m2.toString(), m2.getLexicalType(),
-                                c1.toString(), c2.toString());
+                System.out.println(labelHist);
+
+                System.exit(0);
+
+
+
+                List<String> ll = FileIO.readFile_lineList(Overlord.dataPath + "feats/flickr30kEntities_v2_pairwise_dev.feats");
+                Map<String, Integer> labelDict = new HashMap<>();
+                for(String line : ll){
+                    FeatureVector fv = FeatureVector.parseFeatureVector(line);
+                    labelDict.put(fv.comments, (int)fv.label);
+                }
+                for(Document d : docSet){
+                    List<Mention> mentions = d.getMentionList();
+                    for(int i=0; i<mentions.size(); i++){
+                        Mention m_i = mentions.get(i);
+                        if(m_i.getChainID().equals("0"))
+                            continue;
+
+                        if(m_i.getPronounType() != Mention.PRONOUN_TYPE.NONE &&
+                           m_i.getPronounType() != Mention.PRONOUN_TYPE.SEMI){
+                            continue;
+                        }
+
+                        for(int j=i+1; j<mentions.size(); j++){
+                            Mention m_j = mentions.get(j);
+                            if(m_j.getChainID().equals("0"))
+                                continue;
+
+                            if(m_j.getPronounType() != Mention.PRONOUN_TYPE.NONE &&
+                               m_j.getPronounType() != Mention.PRONOUN_TYPE.SEMI){
+                                continue;
+                            }
+
+                            String id_ij = Document.getMentionPairStr(m_i, m_j, true, true);
+                            String id_ji = Document.getMentionPairStr(m_j, m_i, true, true);
+
+                            if(!labelDict.containsKey(id_ij) || !labelDict.containsKey(id_ji)){
+                                System.out.println("-------");
+                                System.out.println(id_ij);
+                                System.out.println(m_i.toString() + " | " + m_j.toString());
+                                System.out.println(labelDict.containsKey(id_ij));
+                                System.out.println(labelDict.containsKey(id_ji));
+                            }
+
+                            if(labelDict.get(id_ij) == 2 && labelDict.get(id_ji) != 3 ||
+                               labelDict.get(id_ij) == 3 && labelDict.get(id_ji) != 2){
+                                System.out.println("-------");
+                                System.out.println(id_ij);
+                                System.out.println(m_i.toString() + " | " + m_j.toString());
+                                System.out.println(labelDict.get(id_ij) + " | " + labelDict.get(id_ji));
+                                Set<String> boxes_i = new HashSet<>();
+                                for(BoundingBox b : d.getBoxSetForMention(m_i))
+                                    boxes_i.add(""+b.getIdx());
+                                Set<String> boxes_j = new HashSet<>();
+                                for(BoundingBox b : d.getBoxSetForMention(m_j))
+                                    boxes_j.add(""+b.getIdx());
+                                System.out.println(StringUtil.listToString(boxes_i, "|"));
+                                System.out.println(StringUtil.listToString(boxes_j, "|"));
+                                System.out.println(d.getCaption(m_i.getCaptionIdx()).toEntitiesString());
+                                System.out.println(d.getCaption(m_j.getCaptionIdx()).toEntitiesString());
+                            }
+                        }
                     }
                 }
-                ot.writeToCsv("ex_pairwise_mistakes", false);
+
+                System.exit(0);
+
+
+                Minion.export_filteredMentionPairCases(docSet,
+                        Minion :: filter_boxSubsetCases, "ex_subsetCases");
+                System.exit(0);
+
+
+
+                Set<String> hypernyms = new HashSet<>();
+                for(String[] row : FileIO.readFile_table(Overlord.resourcesDir + "hist_hypernym.csv"))
+                    hypernyms.add(row[0]);
+
+                Map<String, Object> hd = new HashMap<>();
+                WordnetUtil wn = new WordnetUtil(Overlord.wordnetDir);
+                for(Document d : docSet){
+                    for(Mention m : d.getMentionList()){
+                        Set<String> leaves = new HashSet<>();
+                        HypTree tree = wn.getHypernymTree(m.getHead().getLemma());
+                        for(List<HypTree.HypNode> branch : tree.getRootBranches()) {
+                            String leaf = null;
+                            for (HypTree.HypNode node : branch) {
+                                if(hypernyms.contains(node.toString())) {
+                                    leaf = node.toString();
+                                    break;
+                                }
+                            }
+                            if(leaf != null)
+                                leaves.add(leaf);
+                        }
+                        hd.put(m.getUniqueID(), leaves);
+                    }
+                }
+                JsonIO.writeFile(hd, "id_hyp_dict");
+                System.exit(0);
+
+                Logger.log("Mysql");
+                Minion.buildImageCaptionDB(Overlord.datasetPath + "Flickr30kEntities_v2.coref",
+                        Overlord.datasetPath + "RELEASE/", Overlord.resourcesDir + "img_comments.csv",
+                        Overlord.resourcesDir + "img_crossval.csv", "engr-cpanel-mysql.engr.illinois.edu",
+                        "ccervan2_root", "thenIdefyheaven!", "ccervan2_imageCaption");
+                Logger.log("SqlLite");
+                Minion.buildImageCaptionDB(Overlord.datasetPath + "Flickr30kEntities_v2.coref",
+                        Overlord.datasetPath + "RELEASE/", Overlord.resourcesDir + "img_comments.csv",
+                        Overlord.resourcesDir + "img_crossval.csv", Overlord.dbPath.replace(".db", "_new.db"));
+                System.exit(0);
+
+                List<String> ll_lems = new ArrayList<>();
+                for(Document d : docSet){
+                    for(Mention m : d.getMentionList()){
+                        ll_lems.add(m.getUniqueID() + "," + m.getHead().getLemma().toLowerCase().replace(",", "[COMMA]"));
+                    }
+                }
+                FileIO.writeFile(ll_lems, "ex_lemma", "csv");
+                System.exit(0);
+
+
+                WordnetUtil wnUtil = new WordnetUtil(Overlord.wordnetDir);
+                Set<String> _hypernyms = new HashSet<>();
+                for(String[] row : FileIO.readFile_table(Overlord.resourcesDir + "hist_hypernym.csv"))
+                    _hypernyms.add(row[0]);
+
+                Map<String, Set<String>> hypDict = new HashMap<>();
+                DoubleDict<String> lemmaHist = new DoubleDict<>();
+                for(Document d : docSet){
+                    for(Mention m : d.getMentionList()){
+                        String lemma = m.getHead().getLemma().toLowerCase();
+                        lemmaHist.increment(lemma);
+                        if(!hypDict.containsKey(lemma)){
+                            Set<String> leaves = new HashSet<>();
+                            HypTree tree = wnUtil.getHypernymTree(m.getHead().getLemma());
+                            for(List<HypTree.HypNode> branch : tree.getRootBranches()) {
+                                String leaf = null;
+                                for (HypTree.HypNode node : branch) {
+                                    if(_hypernyms.contains(node.toString())) {
+                                        leaf = node.toString();
+                                        break;
+                                    }
+                                }
+                                if(leaf != null)
+                                    leaves.add(leaf);
+                            }
+                            hypDict.put(lemma, leaves);
+                        }
+                    }
+                }
+
+                List<String> ll_hyps = new ArrayList<>();
+                for(String lem : hypDict.keySet())
+                    ll_hyps.add(lem + "," + StringUtil.listToString(hypDict.get(lem), "|") + "," + lemmaHist.get(lem));
+                FileIO.writeFile(ll_hyps, "hist_hypernym_lemmas", "csv", false);
+                System.exit(0);
+
+                Map<String, DoubleDict<String>> hypVisHist = new HashMap<>();
+                for(String hyp : _hypernyms)
+                    hypVisHist.put(hyp, new DoubleDict<>());
+
+                for(Document d : docSet){
+                    for(Mention m : d.getMentionList()){
+                        Set<String> leaves = new HashSet<>();
+                        HypTree tree = wnUtil.getHypernymTree(m.getHead().getLemma().toLowerCase());
+                        for(List<HypTree.HypNode> branch : tree.getRootBranches()){
+                            String leaf = null;
+                            for(HypTree.HypNode node : branch){
+                                if(_hypernyms.contains(node.toString())){
+                                    leaf = node.toString();
+                                    break;
+                                }
+                            }
+                            if(leaf != null)
+                                leaves.add(leaf);
+                        }
+                        for(String leaf : leaves){
+                            if(m.getChainID().equals("0"))
+                                hypVisHist.get(leaf).increment("nonvis");
+                            else
+                                hypVisHist.get(leaf).increment("vis");
+                        }
+                    }
+                }
+
+                OutTable ot = new OutTable("hyp", "vis_count", "vis_%", "nonvis_count", "nonvis_%");
+                double total_vis = 0, total_nonvis = 0;
+                for(String hyp : hypVisHist.keySet()){
+                    total_vis += hypVisHist.get(hyp).get("vis");
+                    total_nonvis += hypVisHist.get(hyp).get("nonvis");
+                }
+                for(String hyp : hypVisHist.keySet()){
+                    int vis = (int)hypVisHist.get(hyp).get("vis");
+                    int nonvis = (int)hypVisHist.get(hyp).get("nonvis");
+                    ot.addRow(hyp, vis, 100.0 * vis / total_vis, nonvis, 100.0 * nonvis / total_nonvis);
+                }
+                ot.writeToCsv("hist_hyps", true);
+
+                System.exit(0);
             }
         } else if(argList.contains("Data")) {
             String featsFileToConvert = ns.getString("convert_to_arff");
@@ -188,128 +413,84 @@ public class Overlord
                 if(featsToExtract.equals("pairwise"))
                     ClassifyUtil.exportFeatures_pairwise(docSet, _outroot, numThreads);
                 else if(featsToExtract.equals("affinity"))
-                    ClassifyUtil.exportFeatures_affinity(docSet, _outroot, numThreads);
+                    ClassifyUtil.export_affinityFeats(docSet, dataSplit);
+                else if(featsToExtract.equals("nonvis")) {
+                    ClassifyUtil.initLists();
+                    ClassifyUtil.exportFeatures_nonvis(docSet, _outroot);
+                }
             }
 
         } else if(argList.contains("Learn")) {
+            Logger.log("Reading scores files");
+            List<String> ll_pairwise_scores = FileIO.readFile_lineList(ns.getString("pairwise_scores"));
+            Map<String, double[]> pairwise_scoreDict = new HashMap<>();
+            for(String line : ll_pairwise_scores){
+                String[] lineParts = line.split(",");
+                double[] scores = new double[4];
+                for(int i=1; i<lineParts.length; i++)
+                    scores[i-1] = Math.exp(Double.parseDouble(lineParts[i]));
+                pairwise_scoreDict.put(lineParts[0], scores);
+            }
 
+            BinaryClassifierScoreDict nonvis_scoreDict = new BinaryClassifierScoreDict(ns.getString("nonvis_scores"));
+            RelationInference.infer(docSet, pairwise_scoreDict, numThreads, nonvis_scoreDict);
+            Logger.log("Evaluation");
+            ScoreDict<Integer> graphScores = RelationInference.evaluateGraph();
+            graphScores.printConfusionMatrix();
+            for(int label : graphScores.keySet())
+                System.out.printf("%d & %s & %d (%.2f%%)\n", label, graphScores.getScore(label).toLatexString(),
+                        graphScores.getGoldCount(label),
+                        100.0 * (double)graphScores.getGoldCount(label) / graphScores.getTotalGold());
+            Logger.log("Accuracy");
+            for(int label : graphScores.keySet())
+                System.out.printf("%d : %.2f%%\n", label, graphScores.getAccuracy(label));
+            System.out.printf("total : %.2f%%\n", graphScores.getAccuracy());
+            Logger.log("Pairwise confusion");
+            RelationInference.printPairwiseConfusion();
+
+            Logger.log("Exporting conll files to out/coref/conll/");
+            Map<String, Set<Chain>> docChainSetDict = RelationInference.getPredictedChains();
+            for(Document d : docSet){
+                List<String> lineList_key = d.toConll2012();
+                lineList_key.add(0, "#begin document (" + d.getID() + "); part 000");
+                lineList_key.add("#end document");
+                FileIO.writeFile(lineList_key, "out/coref/conll/" + d.getID().replace(".jpg", "") + "_key", "conll", false);
+
+                Set<Chain> predChainSet = docChainSetDict.get(d.getID());
+                if(predChainSet == null){
+                    Logger.log("Document %s has no predicted chains", d.getID());
+                    predChainSet = new HashSet<>();
+                }
+                List<String> lineList_resp = Document.toConll2012(d, predChainSet);
+                lineList_resp.add(0, "#begin document (" + d.getID() + "); part 000");
+                lineList_resp.add("#end document");
+                FileIO.writeFile(lineList_resp, "out/coref/conll/" + d.getID().replace(".jpg", "") + "_response", "conll", false);
+            }
+
+            Logger.log("Exporting htm files");
+            Map<String, Set<Chain[]>> predSubsetChains = RelationInference.getPredictedSubsetChains();
+            System.out.println("Docs with pred subsets: " + predSubsetChains.keySet().size());
+            int numDocsWithGoldSubsets = 0;
+            for(Document d : docSet)
+                if(!d.getSubsetMentions().isEmpty())
+                    numDocsWithGoldSubsets++;
+            System.out.println("Docs with gold subsets: " + numDocsWithGoldSubsets);
+            List<String> docIds = new ArrayList<>(predSubsetChains.keySet());
+            Collections.shuffle(docIds);
+            for(int i=0; i<100; i++){
+                Document d = null;
+                for(Document dPrime : docSet)
+                    if(dPrime.getID().equals(docIds.get(i)))
+                        d = dPrime;
+                if(d != null){
+                    FileIO.writeFile(HtmlIO.getImgHtm(d, docChainSetDict.get(d.getID()),
+                            predSubsetChains.get(d.getID())),
+                            "out/coref/htm/" + d.getID().replace(".jpg", ""),
+                            "htm", false);
+                }
+            }
         }
 	}
-
-
-
-	/**This is just quick and dirty code for when I need to
-	 * do something that won't really persist. This function
-	 * may as well say 'deleteme' on it.
-	 */
-	/*
-	private static void debug(String... args)
-    {
-        if(args[0].equals("data")){
-            Collection<Document> docSet = DocumentLoader.getDocumentSet(new DBConnector(Overlord.dbPath));
-            List<String> ll = new ArrayList<>();
-            for(Document d : docSet){
-                for(Caption c : d.getCaptionList()){
-                    List<String> lemStr = new ArrayList<>();
-                    for(Token t : c.getTokenList())
-                        lemStr.add(t.getLemma());
-                    ll.add(d.getID() + "#" + c.getIdx() + "\t" + StringUtil.listToString(lemStr, " "));
-                }
-            }
-            FileIO.writeFile(ll, "Flickr30kEntities_v2", "lemma", false);
-            //WekaMulticlass.exportToArff("../flickr30kEntities_v2_pairwise_train.feats");
-            //WekaMulticlass.exportToArff("../flickr30kEntities_v2_pairwise_dev.feats");
-        } else if(args[0].equals("train")){
-            WekaMulticlass wekaMulticlass = new WekaMulticlass();
-            Logger.log("Training classifier");
-            //wekaMulticlass._train("../flickr30kEntities_v2_pairwise_train.arff",
-            //        "models/pairwise_log.model");
-            //wekaMulticlass.train("/Users/syphonnihil/source/working/flickr30kEntities_v2_pairwise_dev_with_IDs.arff", "pairwise_mcc.model");
-            wekaMulticlass.train("../flickr30kEntities_v2_pairwise_train.arff",
-                    "models/pairwise_mcc.model", 1000, 100000, true);
-        } else if(args[0].equals("eval")){
-            Logger.log("Loading model from file");
-            WekaMulticlass wekaMulticlass = new WekaMulticlass("models/pairwise_mcc.model");
-            Logger.log("Evaluating classifier");
-            wekaMulticlass.evaluate("../flickr30kEntities_v2_pairwise_dev.arff");
-            /*wekaMulticlass._eval("../flickr30kEntities_v2_pairwise_dev.arff",
-                    "models/pairwise_log.model");*
-        } else if(args[0].equals("token")){
-            Set<String[]> mismatchCaps = new HashSet<>();
-
-            Logger.log("Reading token file");
-            Map<String, String> capDict_tok = new HashMap<>();
-            List<String> capIDs = new ArrayList<>();
-            for(String line : FileIO.readFile_lineList("../results_20130124_fixed.token")){
-                String[] lineParts = line.split("\t");
-                capDict_tok.put(lineParts[0], lineParts[1]);
-                capIDs.add(lineParts[0]);
-            }
-
-            Logger.log("Loading documents from Entities (v2) DB");
-            Map<String, Document> docDict_v2 = new HashMap<>();
-            Map<String, String> capDict_v2 = new HashMap<>();
-            for(Document d : DocumentLoader.getDocumentSet(new DBConnector(Overlord.dbPath))){
-                docDict_v2.put(d.getID(), d);
-                for(Caption c : d.getCaptionList()){
-                    String capID = d.getID() + "#" + c.getIdx();
-                    String capStr_tok = capDict_tok.get(capID);
-                    String capStr = c.toString();
-                    if(!capStr.equals(capStr_tok))
-                        mismatchCaps.add(new String[]{capStr, capStr_tok});
-                    capDict_v2.put(capID, c.toString());
-                }
-            }
-
-            List<String> ll_tokV2 = new ArrayList<>();
-            for(String capID : capIDs)
-                ll_tokV2.add(capID + "\t" + capDict_v2.get(capID));
-            FileIO.writeFile(ll_tokV2, "../flickr30kEntities_v2", "token", false);
-
-        } else if(args[0].equals("pronom")){
-            Collection<Document> docSet = DocumentLoader.getDocumentSet(new DBConnector(Overlord.dbPath), 0);
-            //Minion.exportPronomAttrEx(docSet);
-            Minion.pronomCorefEval(docSet);
-        } else if(args[0].equals("legacy")){
-            List<String> typoCaps = new ArrayList<>();
-            Set<legacy.Document> docSet = legacy.Page.getDocumentSet();
-            for(legacy.Document d : docSet){
-                for(legacy.Caption c : d.getCaptionArr()){
-                    if(c.TYPO)
-                        typoCaps.add(d.getID() + ".jpg#" + c.getIdx());
-                }
-            }
-        } else if(args[0].equals("box")) {
-            Collection<Document> docSet = DocumentLoader.getDocumentSet(new DBConnector(Overlord.dbPath), 1);
-            DoubleDict<Boolean> distro = new DoubleDict<>();
-            for(Document d : docSet){
-                for(BoundingBox b : d.getBoundingBoxSet()){
-                    Set<Mention> mentionBoxSet = d.getMentionSetForBox(b);
-                    for(Mention m : d.getMentionList()){
-                        distro.increment(mentionBoxSet.contains(m));
-                    }
-                }
-            }
-            System.out.println("True distro");
-            for(Boolean label : distro.keySet())
-                System.out.printf("%s : %.2f%%\n", label, 100.0 * distro.get(label) / distro.getSum());
-
-        } else if(args[0].equals("subset")){
-            Collection<Document> docSet = DocumentLoader.getDocumentSet(new DBConnector(Overlord.dbPath), 0);
-
-        } else if(args[0].equals("feats")){
-            Collection<Document> docSet = DocumentLoader.getDocumentSet(new DBConnector(Overlord.dbPath), 1);
-            ClassifyUtil.initLists();
-            ClassifyUtil.exportFeatures_pairwise(docSet, "../flickr30kEntities_v2_pairwise_train", 24);
-        }
-        System.exit(0);
-
-
-
-
-    }
-*/
-
 
     /**Returns the Namespace object for the given parser, run over
      * the given args; Quits the application if arg parser is violated

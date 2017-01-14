@@ -1,0 +1,93 @@
+=================================================
+Table of Contents
+=================================================
+1) Introduction
+2) Build
+3) Usage
+4) Example Workflows
+5) Changelog
+
+=================================================
+1) Introduction
+=================================================
+TODO: Write an intro
+
+=================================================
+2) Build
+=================================================
+Assuming one has set up their java / maven / etc paths correctly,
+ImageCaptionLearn can be built using the accompanying build.sh script,
+which is little more than a wrapper for "mvn clean package".
+When building, we assume a directory structure as
+ImageCaptionLearn
+|---target
+|---src
+    |---main
+        |---java
+            |---core
+            |---learn
+            |---out
+            |---statistical
+From there, maven (by way of the accompanying pom.xml) should
+compile the src into the target dir, which will contain a
+    ImageCaptionLearn-VERSION-jar-with-dependencies.jar
+which is executable.
+
+
+=================================================
+3) Usage
+=================================================
+ImageCaptionLearn is currently undergoing significant flux (more than usual,
+which is already pretty high) but the current usage can be found below.
+
+*****Usage*****
+ImageCaptionLearn has several modules, each with  their  own  args.  To get more info on a
+particular module, specify the module with --help
+
+positional arguments:
+  {Debug,Data,Learn}
+
+optional arguments:
+  -h, --help             show this help message and exit
+  --quiet                Whether to log output (default: false)
+  --log_delay LOG_DELAY  Minimum seconds to wait between  logging progress status messages
+                         (default: 90)
+  --out ROOT             Writes output to file with ROOT prefix
+  --threads NUM          Uses NUM threads, where applicable (default: 1)
+  --data {train,dev,test,all}
+                         Where applicable, loads only the specified data
+
+*****Debug*****
+optional arguments:
+  -h, --help             show this help message and exit
+  --heterog_subset       Exports a list of heterog subset pairs
+  --penult_filter        Exports mention pairs for which the penult filter fires
+
+*****Data*****
+optional arguments:
+  -h, --help             show this help message and exit
+  --convert_to_arff PATH
+                         Converts the specified .feats file to .arff format
+  --extractFeats {pairwise,affinity}
+                         Extracts features to --out
+
+*****Learn*****
+optional arguments:
+  -h, --help             show this help message and exit
+  --train_file PATH      Training data
+  --model_file PATH      Model file (save to / load from)
+  --learner {weka_multi,liblinear_logistic}
+                         Specifies which training is taking place
+  --batch_size SIZE      Specifies SIZE batches during training
+  --epochs NUM           Specifies NUM epochs
+  --eval_file PATH       Evaluation data
+  --pronom_coref         Evaluate rule-based pronominal coreference resolution
+
+=================================================
+4) Example Workflows
+=================================================
+
+=================================================
+5) Changelog
+=================================================
+
