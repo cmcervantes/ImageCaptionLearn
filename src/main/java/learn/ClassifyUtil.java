@@ -1,6 +1,5 @@
 package learn;
 
-import core.Minion;
 import core.Overlord;
 import nlptools.Word2VecUtil;
 import nlptools.WordnetUtil;
@@ -38,60 +37,86 @@ public abstract class ClassifyUtil {
     private static Set<String> _colors;
     protected static Set<String> _detSet_singular;
     protected static Set<String> _detSet_plural;
-    protected static List<String> _detList;
     protected static Set<String> _stopWords;
     protected static List<String> _hypernyms;
 
     //onehot lists
-    protected static List<String> _typePairList;
-    protected static List<String> _leftPairList;
-    protected static List<String> _rightPairList;
-    protected static List<String> _headPairList;
-    protected static List<String> _lemmaPairList;
-    protected static List<String> _subjOfPairList;
-    protected static List<String> _objOfPairList;
-    protected static List<String> _headList;
-    protected static List<String> _typeList;
-    protected static List<String> _leftList;
-    protected static List<String> _rightList;
-    protected static List<String> _subjOfList;
-    protected static List<String> _objOfList;
-    protected static List<String> _cardList;
-    protected static List<String> _pronounList;
-    protected static List<String> _pronounTypeList;
-    protected static List<String> _modifierPairs;
-    protected static List<String> _modifierList;
-    protected static List<String> _numericList;
-    protected static List<String> _numericPairs;
-    protected static List<String> _prepositionList;
-    protected static List<String> _prepositionPairList;
+    private static Map<String, Integer> _typePairs;
+    private static Map<String, Integer> _leftPairs;
+    private static Map<String, Integer> _rightPairs;
+    private static Map<String, Integer> _headPairs;
+    private static Map<String, Integer> _lemmaPairs;
+    private static Map<String, Integer> _subjOfPairs;
+    private static Map<String, Integer> _objOfPairs;
+    private static Map<String, Integer> _modifierPairs;
+    private static Map<String, Integer> _numericPairs;
+    private static Map<String, Integer> _prepositionPairs;
+    private static Map<String, Integer> _heads;
+    private static Map<String, Integer> _modifiers;
+    private static Map<String, Integer> _numerics;
+    private static Map<String, Integer> _prepositions;
+    private static Map<String, Integer> _types;
+    private static Map<String, Integer> _lefts;
+    private static Map<String, Integer> _rights;
+    private static Map<String, Integer> _subjOfs;
+    private static Map<String, Integer> _objOfs;
+    private static Map<String, Integer> _pronouns;
+    private static Map<String, Integer> _pronounTypes;
+    private static Map<String, Integer> _dets;
+    private static Map<String, Integer> _nonvisuals;
 
     protected static final String pattern_aside = "^NP , (NP (VP |ADJP |PP |and )*)+,.*$";
 
-    public static void initLists() {
-        //onehot lists
-        _typePairList = getOneHotList(Overlord.resourcesDir + "hist_typePair_ordered.csv", 1000);
-        _leftPairList = getOneHotList(Overlord.resourcesDir + "hist_leftPair_ordered.csv", 1000);
-        _rightPairList = getOneHotList(Overlord.resourcesDir + "hist_rightPair_ordered.csv", 1000);
-        _headPairList = getOneHotList(Overlord.resourcesDir + "hist_headPair_ordered.csv", 1);
-        _lemmaPairList = getOneHotList(Overlord.resourcesDir + "hist_lemmaPair_ordered.csv", 1);
-        _subjOfPairList = getOneHotList(Overlord.resourcesDir + "hist_subjOfPair_ordered.csv", 1);
-        _objOfPairList = getOneHotList(Overlord.resourcesDir + "hist_objOfPair_ordered.csv", 1);
-        _modifierPairs = getOneHotList(Overlord.resourcesDir + "hist_modifierPair.csv", 1);
-        _numericPairs = getOneHotList(Overlord.resourcesDir + "hist_numericModifierPair.csv", 1);
-        _prepositionPairList = getOneHotList(Overlord.resourcesDir + "hist_prepositionPair.csv", 1);
-        _headList = getOneHotList(Overlord.resourcesDir + "hist_head.csv", 1);
-        _modifierList = getOneHotList(Overlord.resourcesDir + "hist_modifier.csv", 1);
-        _numericList = getOneHotList(Overlord.resourcesDir + "hist_numericModifier.csv", 1);
-        _prepositionList = getOneHotList(Overlord.resourcesDir + "hist_preposition.csv", 1);
-        _typeList = getOneHotList(Overlord.resourcesDir + "hist_type.csv", 1000);
-        _leftList = getOneHotList(Overlord.resourcesDir + "hist_left.csv", 1000);
-        _rightList = getOneHotList(Overlord.resourcesDir + "hist_right.csv", 1000);
-        _subjOfList = getOneHotList(Overlord.resourcesDir + "hist_subjOf.csv", 1);
-        _objOfList = getOneHotList(Overlord.resourcesDir + "hist_objOf.csv", 1);
-        _cardList = getOneHotList(Overlord.resourcesDir + "hist_cardinality.csv", 0);
-        _pronounList = getOneHotList(Overlord.resourcesDir + "hist_pronoun.csv", 1);
-        _pronounTypeList = getOneHotList(Overlord.resourcesDir + "hist_pronounType.csv", 0);
+    /**Loads a onehot index dictionary given a histogram file and a frequency cutoff;
+     * specifying 1, for example, loads the dictionary with all entries which have frequency
+     * greater than 1.
+     * NOTE: This stores indices as a dictionary, rather than simply as a list, for efficiency
+     * concerns. The additional memory overhead of a hashmap is worth the ~35x speedup gained by
+     * constant time lookups of onehot indices
+     *
+     * @param filename
+     * @param freqCutoff
+     * @return
+     */
+    private static Map<String, Integer> _loadOnehotDict(String filename, int freqCutoff)
+    {
+        Map<String, Integer> idxDict = new HashMap<>();
+        String[][] table = FileIO.readFile_table(filename);
+        int idx = 0;
+        for(int i=0; i<table.length; i++){
+            String[] row = table[i];
+            if(Double.parseDouble(row[1]) > freqCutoff)
+                idxDict.put(row[0], idx++); //idx not i because we don't want to count
+                                            //entries below the cutoff
+        }
+        return idxDict;
+    }
+
+    private static void _featurePreprocessing(Collection<Document> docSet)
+    {
+        Logger.log("Feature preprocessing (onehot index dictionaries)");
+        _typePairs = _loadOnehotDict(Overlord.resourcesDir + "hist_typePair_ordered.csv", 1000);
+        _leftPairs = _loadOnehotDict(Overlord.resourcesDir + "hist_leftPair_ordered.csv", 1000);
+        _rightPairs = _loadOnehotDict(Overlord.resourcesDir + "hist_rightPair_ordered.csv", 1000);
+        _headPairs = _loadOnehotDict(Overlord.resourcesDir + "hist_headPair_ordered.csv", 1);
+        _lemmaPairs = _loadOnehotDict(Overlord.resourcesDir + "hist_lemmaPair_ordered.csv", 1);
+        _subjOfPairs = _loadOnehotDict(Overlord.resourcesDir + "hist_subjOfPair_ordered.csv", 1);
+        _objOfPairs = _loadOnehotDict(Overlord.resourcesDir + "hist_objOfPair_ordered.csv", 1);
+        _modifierPairs = _loadOnehotDict(Overlord.resourcesDir + "hist_modifierPair.csv", 1);
+        _numericPairs = _loadOnehotDict(Overlord.resourcesDir + "hist_numericModifierPair.csv", 1);
+        _prepositionPairs = _loadOnehotDict(Overlord.resourcesDir + "hist_prepositionPair.csv", 1);
+        _heads = _loadOnehotDict(Overlord.resourcesDir + "hist_head.csv", 1);
+        _modifiers = _loadOnehotDict(Overlord.resourcesDir + "hist_modifier.csv", 1);
+        _numerics = _loadOnehotDict(Overlord.resourcesDir + "hist_numericModifier.csv", 1);
+        _prepositions = _loadOnehotDict(Overlord.resourcesDir + "hist_preposition.csv", 1);
+        _types = _loadOnehotDict(Overlord.resourcesDir + "hist_type.csv", 1000);
+        _lefts = _loadOnehotDict(Overlord.resourcesDir + "hist_left.csv", 1000);
+        _rights = _loadOnehotDict(Overlord.resourcesDir + "hist_right.csv", 1000);
+        _subjOfs = _loadOnehotDict(Overlord.resourcesDir + "hist_subjOf.csv", 1);
+        _objOfs = _loadOnehotDict(Overlord.resourcesDir + "hist_objOf.csv", 1);
+        _pronouns = _loadOnehotDict(Overlord.resourcesDir + "hist_pronoun.csv", 1);
+        _pronounTypes = _loadOnehotDict(Overlord.resourcesDir + "hist_pronounType.csv", 0);
+        _nonvisuals = _loadOnehotDict(Overlord.resourcesDir + "hist_nonvisual.csv", 1);
 
         _hypernyms = new ArrayList<>();
         for(String[] row : FileIO.readFile_table(Overlord.resourcesDir + "hist_hypernym.csv"))
@@ -100,13 +125,13 @@ public abstract class ClassifyUtil {
         //read other from files
         _colors = new HashSet<>(FileIO.readFile_lineList(Overlord.resourcesDir + "colors.txt"));
         _stopWords = new HashSet<>(FileIO.readFile_lineList(Overlord.resourcesDir + "stop_words.txt"));
-        _detList = new ArrayList<>();
+        List<String> dets = new ArrayList<>();
         _detSet_singular = new HashSet<>();
         _detSet_plural = new HashSet<>();
         String[][] detTable = FileIO.readFile_table(Overlord.resourcesDir + "dets.csv");
         for (String[] row : detTable) {
             if (row.length > 1) {
-                _detList.add(row[0]);
+                dets.add(row[0]);
                 if (row[1].equals("singular")) {
                     _detSet_singular.add(row[0]);
                 } else if (row[1].equals("plural")) {
@@ -114,91 +139,9 @@ public abstract class ClassifyUtil {
                 }
             }
         }
-    }
-
-    private static Set<String> getSansIDs(Collection<Document> docSet, String sansType) {
-        Set<String> ignoreIDs = new HashSet<>();
-        for (Document d : docSet) {
-            List<Mention> mentionList = d.getMentionList();
-            for (int i = 0; i < mentionList.size(); i++) {
-                for (int j = i + 1; j < mentionList.size(); j++) {
-                    Mention m1 = mentionList.get(i);
-                    Mention m2 = mentionList.get(j);
-
-                    if (sansType.contains("nonvis"))
-                        if (m1.getChainID().equals("0") || m2.getChainID().equals("0"))
-                            ignoreIDs.add(Document.getMentionPairStr(m1, m2, true));
-                    if (sansType.contains("pronom"))
-                        if (m1.getPronounType() != Mention.PRONOUN_TYPE.NONE || m2.getPronounType() != Mention.PRONOUN_TYPE.NONE)
-                            ignoreIDs.add(Document.getMentionPairStr(m1, m2, true));
-                }
-            }
-        }
-        return ignoreIDs;
-    }
-
-    public static void exportFeatures_pairwise(Collection<Document> docSet, String outroot, int numThreads) {
-        _outroot = outroot + ".feats";
-
-        Logger.log("Initializing lists");
-        ClassifyUtil.initLists();
-
-        Logger.log("Mapping mentions to their subjOf / objOf verbs");
-        _subjOfDict = new HashMap<>();
-        _objOfDict = new HashMap<>();
-        for (Document d : docSet) {
-            for (Caption c : d.getCaptionList()) {
-                for (Mention m : c.getMentionList()) {
-                    Chunk subjOf = c.getSubjectOf(m);
-                    Chunk objOf = c.getObjectOf(m);
-                    if (subjOf != null)
-                        _subjOfDict.put(m, subjOf);
-                    if (objOf != null)
-                        _objOfDict.put(m, objOf);
-                }
-            }
-        }
-
-        Logger.log("Feature preprocessing (lemma counts)");
-        _imgLemmaCountDict = new HashMap<>();
-        for (Document d : docSet) {
-            _imgLemmaCountDict.put(d.getID(), new DoubleDict<>());
-            for (Mention m : d.getMentionList())
-                _imgLemmaCountDict.get(d.getID()).increment(m.getHead().getLemma().toLowerCase().trim());
-        }
-
-        Logger.log("Feature preprocessing (only type)");
-        _onlyTypeMentions = new HashSet<>();
-        for (Document d : docSet) {
-            for (Caption c : d.getCaptionList()) {
-                //count the types being used, then set our only type field
-                DoubleDict<String> typeCountDict = new DoubleDict<>();
-                for (Mention m : c.getMentionList())
-                    typeCountDict.increment(m.getLexicalType());
-                for (Mention m : c.getMentionList())
-                    if (typeCountDict.get(m.getLexicalType()) == 1)
-                        _onlyTypeMentions.add(m);
-            }
-        }
-
-        Logger.log("Feature preprocessing (adjecent prepositions)");
-        _prepDict_left = new HashMap<>();
-        _prepDict_right = new HashMap<>();
-        for(Document d : docSet){
-            for(Caption c : d.getCaptionList()){
-                for(Mention m : c.getMentionList()){
-                    List<Chunk> chunkList = m.getChunkList();
-                    if(!m.getChunkList().isEmpty()){
-                        Chunk left = c.getLeftNeighbor(chunkList.get(0));
-                        Chunk right = c.getRightNeighbor(chunkList.get(chunkList.size()-1));
-                        if(left != null && left.getChunkType().equals("PP"))
-                            _prepDict_left.put(m, left.toString().toLowerCase());
-                        if(right != null && right.getChunkType().equals("PP"))
-                            _prepDict_right.put(m, right.toString().toLowerCase());
-                    }
-                }
-            }
-        }
+        _dets = new HashMap<>();
+        for(int i=0; i<dets.size(); i++)
+            _dets.put(dets.get(i), i);
 
         Logger.log("Feature preprocessing (chunk neighbors)");
         _mentionChunkNeighborDict = new HashMap<>();
@@ -244,63 +187,6 @@ public abstract class ClassifyUtil {
             }
         }
 
-        Logger.log("Feature preprocessing (hypernyms)");
-        _hypDict = new HashMap<>();
-        WordnetUtil wnUtil = new WordnetUtil(Overlord.wordnetDir);
-        for(Document d : docSet){
-            for(Mention m : d.getMentionList()){
-                String lemma = m.getHead().getLemma().toLowerCase();
-                if(!_hypDict.containsKey(lemma)){
-                    Set<String> leaves = new HashSet<>();
-                    HypTree tree = wnUtil.getHypernymTree(lemma);
-                    for(List<HypTree.HypNode> branch : tree.getRootBranches()) {
-                        String leaf = null;
-                        for (HypTree.HypNode node : branch) {
-                            if(_hypernyms.contains(node.toString())) {
-                                leaf = node.toString();
-                                break;
-                            }
-                        }
-                        if(leaf != null)
-                            leaves.add(leaf);
-                    }
-                    _hypDict.put(lemma, leaves);
-                }
-            }
-        }
-
-        exportFeatures(docSet, ExtractionThreadType.PAIRWISE, numThreads);
-
-        JsonIO.writeFile(ExtractionThread.getMetaDict(), outroot + "_meta", false);
-    }
-
-    public static void exportFeatures_nonvis(Collection<Document> docSet, String outroot)
-    {
-        Logger.log("Feature preprocessing (hypernyms)");
-        _hypDict = new HashMap<>();
-        WordnetUtil wnUtil = new WordnetUtil(Overlord.wordnetDir);
-        for(Document d : docSet){
-            for(Mention m : d.getMentionList()){
-                String lemma = m.getHead().getLemma().toLowerCase();
-                if(!_hypDict.containsKey(lemma)){
-                    Set<String> leaves = new HashSet<>();
-                    HypTree tree = wnUtil.getHypernymTree(m.getHead().getLemma());
-                    for(List<HypTree.HypNode> branch : tree.getRootBranches()) {
-                        String leaf = null;
-                        for (HypTree.HypNode node : branch) {
-                            if(_hypernyms.contains(node.toString())) {
-                                leaf = node.toString();
-                                break;
-                            }
-                        }
-                        if(leaf != null)
-                            leaves.add(leaf);
-                    }
-                    _hypDict.put(lemma, leaves);
-                }
-            }
-        }
-
         Logger.log("Feature preprocessing (subj/obj of verbs)");
         _subjOfDict = new HashMap<>();
         _objOfDict = new HashMap<>();
@@ -317,7 +203,7 @@ public abstract class ClassifyUtil {
             }
         }
 
-        Logger.log("Feature preprocessing (adjecent prepositions)");
+        Logger.log("Feature preprocessing (adjacent prepositions)");
         _prepDict_left = new HashMap<>();
         _prepDict_right = new HashMap<>();
         for(Document d : docSet){
@@ -336,82 +222,243 @@ public abstract class ClassifyUtil {
             }
         }
 
+        Logger.log("Feature preprocessing (only type)");
+        _onlyTypeMentions = new HashSet<>();
+        for (Document d : docSet) {
+            for (Caption c : d.getCaptionList()) {
+                //count the types being used, then set our only type field
+                DoubleDict<String> typeCountDict = new DoubleDict<>();
+                for (Mention m : c.getMentionList())
+                    typeCountDict.increment(m.getLexicalType());
+                for (Mention m : c.getMentionList())
+                    if (typeCountDict.get(m.getLexicalType()) == 1)
+                        _onlyTypeMentions.add(m);
+            }
+        }
+
+        Logger.log("Feature preprocessing (lemma counts)");
+        _imgLemmaCountDict = new HashMap<>();
+        for (Document d : docSet) {
+            _imgLemmaCountDict.put(d.getID(), new DoubleDict<>());
+            for (Mention m : d.getMentionList())
+                _imgLemmaCountDict.get(d.getID()).increment(m.getHead().getLemma().toLowerCase().trim());
+        }
+
+        Logger.log("Feature preprocessing (hypernyms)");
+        _hypDict = new HashMap<>();
+        WordnetUtil wnUtil = new WordnetUtil(Overlord.wordnetDir);
+        for(Document d : docSet){
+            for(Mention m : d.getMentionList()){
+                String lemma = m.getHead().getLemma().toLowerCase();
+                if(!_hypDict.containsKey(lemma)){
+                    Set<String> boh = wnUtil.getBagOfHypernyms(lemma);
+                    if(boh.isEmpty())
+                        boh.add("");
+                    _hypDict.put(lemma, boh);
+                }
+            }
+        }
+    }
+
+    public static void exportFeatures_relation(Collection<Document> docSet, String outroot, int numThreads)
+    {
+        //Feature preprocessing
+        _featurePreprocessing(docSet);
+
+        _outroot = outroot + ".feats";
+        Logger.log("Opening [" +_outroot+ "] for writing");
+        BufferedWriter bw = null;
+        try {
+            bw = new BufferedWriter(new FileWriter(_outroot));
+        } catch(IOException ioEx) {
+            System.err.println("Could not save output file " + _outroot);
+            System.exit(0);
+        }
+
+        List<Document> docList = new ArrayList<>(docSet);
+        ExtractionThread[] threadPool = new ExtractionThread[numThreads];
+
+        //create and start our first set of threads
+        int docIdx = 0;
+        for(int i=0; i<numThreads; i++) {
+            Document d = docList.get(docIdx);
+            threadPool[i] = new ExtractionThread(d, ExtractionThreadType.PAIRWISE);
+            docIdx++;
+        }
+
+        for(int i=0; i<threadPool.length; i++)
+            threadPool[i].start();
+        boolean foundLiveThread = true;
+        Set<String> addedDocIDs = new HashSet<>();
+        DoubleDict<Integer> labelDistro = new DoubleDict<>();
+        while(docIdx < docList.size() || foundLiveThread) {
+            foundLiveThread = false;
+            for(int i=0; i<numThreads; i++) {
+                if(threadPool[i].isAlive()) {
+                    foundLiveThread = true;
+                } else {
+                    addedDocIDs.add(threadPool[i]._doc.getID());
+                    //if this is a dead thread, store it
+                    try{
+                        for(FeatureVector fv : threadPool[i].fvSet) {
+                            bw.write(fv.toString() + "\n");
+                            labelDistro.increment((int)fv.label);
+                        }
+                        addedDocIDs.add(threadPool[i]._doc.getID());
+                    } catch (IOException ioEx){
+                        Logger.log(ioEx);
+                    }
+
+                    //independently, if we found a dead thread and we
+                    //still have image IDs to iterate through, swap this
+                    //dead one out for a live one
+                    if(docIdx < docList.size()) {
+                        Logger.logStatus("Processed %d images (%.2f%%)",
+                                docIdx, 100.0*(double)docIdx / docList.size());
+                        Document d = docList.get(docIdx);
+                        threadPool[i] = new ExtractionThread(d, ExtractionThreadType.PAIRWISE);
+                        docIdx++;
+                        threadPool[i].start();
+                        foundLiveThread = true;
+                    }
+                }
+            }
+
+            //before we check for threadlife again, let's
+            //sleep for a half second so we don't burn
+            try{Thread.sleep(500);}
+            catch(InterruptedException iEx){/*do nothing*/}
+        }
+
+        //go through the thread pool one last time to
+        //collect the last of our threads
+        for(int i=0; i<numThreads; i++) {
+            if(!addedDocIDs.contains(threadPool[i]._doc.getID())){
+                try{
+                    for(FeatureVector fv : threadPool[i].fvSet) {
+                        bw.write(fv.toString() + "\n");
+                        labelDistro.increment((int)fv.label);
+                    }
+                    addedDocIDs.add(threadPool[i]._doc.getID());
+                } catch (IOException ioEx){
+                    Logger.log(ioEx);
+                }
+                addedDocIDs.add(threadPool[i]._doc.getID());
+            }
+        }
+
+        Logger.log("Label distro");
+        System.out.println(labelDistro.toString());
+
+        Logger.log("Closing [" + _outroot + "]");
+        try {
+            bw.close();
+        } catch(IOException ioEx) {
+            System.err.println("Could not save output file " + _outroot);
+        }
+        JsonIO.writeFile(ExtractionThread.getMetaDict(), outroot + "_meta", false);
+    }
+
+    public static void exportFeatures_nonvis(Collection<Document> docSet, String outroot)
+    {
+        _exportFeatures_singleMention(docSet, outroot, "nonvis");
+    }
+
+    public static void exportFeatures_boxCard(Collection<Document> docSet, String outroot)
+    {
+        _exportFeatures_singleMention(docSet, outroot, "boxCard");
+    }
+
+    /**Exports features representing a single mention (since we're double dipping with some of these);
+     * labelType \in {'nonvis', 'boxCard'}
+     *
+     * @param docSet
+     * @param outroot
+     * @param labelType
+     */
+    private static void _exportFeatures_singleMention(Collection<Document> docSet, String outroot, String labelType)
+    {
+        //Feature preprocessing
+        _featurePreprocessing(docSet);
+
         Map<String, Object> metaDict = new HashMap<>();
-        int start = 1, end = start + _headList.size();
-        metaDict.put("head", new Integer[]{start, end});
-        start = end + 1; end = start + _numericList.size();
-        metaDict.put("numeric", new Integer[]{start, end});
-        start = end + 1; end = start + _modifierList.size();
-        metaDict.put("modifier", new Integer[]{start, end});
-        start = end + 1; end = start + _subjOfList.size();
-        metaDict.put("subj_of", new Integer[]{start, end});
-        start = end + 1; end = start + _objOfList.size();
-        metaDict.put("obj_of", new Integer[]{start, end});
-        start = end + 1; end = start + _prepositionList.size();
-        metaDict.put("preposition_left", new Integer[]{start, end});
-        start = end + 1; end = start + _prepositionList.size();
-        metaDict.put("preposition_right", new Integer[]{start, end});
-        start = end + 1; end = start + _hypernyms.size();
-        metaDict.put("hypernym", new Integer[]{start, end});
-        metaDict.put("max_idx", end+1);
 
         Logger.log("Extracting features");
         Set<FeatureVector> fvSet = new HashSet<>();
-        for(Document d : docSet){
-            for(Mention m : d.getMentionList()){
-                if(m.getPronounType() != Mention.PRONOUN_TYPE.NONE &&
-                   m.getPronounType() != Mention.PRONOUN_TYPE.SEMI)
+        for(Document d : docSet) {
+            for (Mention m : d.getMentionList()) {
+                //if this is an unreviewed pronominal mention during nonvis train,
+                //skip it (since these annotations are unreliable)
+                if(labelType.equals("nonvis") && !d.reviewed &&
+                   m.getPronounType() != Mention.PRONOUN_TYPE.NONE)
                     continue;
 
                 FeatureVector fv = new FeatureVector();
                 fv.comments = m.getUniqueID();
-                fv.label = m.getChainID().equals("0") ? 1.0 : 0.0;
-                int currentIdx = 0;
+                if(labelType.equals("nonvis"))
+                    fv.label = m.getChainID().equals("0") ? 1.0 : 0.0;
+                else if (labelType.equals("boxCard"))
+                    fv.label = Math.min(d.getBoxSetForMention(m).size(), 11);
+                int currentIdx = 1;
 
+                //head word / modifiers / lexical type
                 String head = m.getHead().toString().toLowerCase();
-                if(_headList.indexOf(head) > -1)
-                    fv.addFeature(currentIdx + _headList.indexOf(head) + 1, 1.0);
-                currentIdx += _headList.size() + 1;
-
+                currentIdx = addOneHotVector(head, fv, currentIdx, _heads, "head", metaDict);
                 String[] mods = m.getModifiers();
-                if(_numericList.indexOf(mods[0]) > -1)
-                    fv.addFeature(currentIdx + _numericList.indexOf(mods[0]) + 1, 1.0);
-                currentIdx += _numericList.size() + 1;
-                if(_modifierList.indexOf(mods[1]) > -1)
-                    fv.addFeature(currentIdx + _modifierList.indexOf(mods[1]) + 1, 1.0);
-                currentIdx += _modifierList.size() + 1;
+                currentIdx = addOneHotVector(mods[0], fv, currentIdx, _numerics, "numeric", metaDict);
+                currentIdx = addOneHotVector(mods[1], fv, currentIdx, _modifiers, "modifier", metaDict);
+                String lexType = m.getLexicalType().toLowerCase();
+                currentIdx = addOneHotVector(lexType, fv, currentIdx, _types, "lexical_type", metaDict);
+                String lemma = m.getHead().getLemma().toLowerCase();
+                currentIdx = addOneHotVector(lemma, fv, currentIdx, _nonvisuals, "nonvisual_lemma", metaDict);
 
-                Chunk subjOf = _subjOfDict.get(m);
-                String subjOfStr = "";
+                //governing verbs
+                Chunk subjOf = _subjOfDict.get(m); String subjOfStr = "";
                 if(subjOf != null)
                     subjOfStr = subjOf.getTokenList().get(subjOf.getTokenList().size()-1).toString().toLowerCase();
-                if(_subjOfList.indexOf(subjOfStr) > -1)
-                    fv.addFeature(currentIdx + _subjOfList.indexOf(subjOfStr) + 1, 1.0);
-                currentIdx += _subjOfList.size() + 1;
-
-                Chunk objOf = _objOfDict.get(m);
-                String objOfStr = "";
+                currentIdx = addOneHotVector(subjOfStr, fv, currentIdx, _subjOfs, "subj_of", metaDict);
+                Chunk objOf = _objOfDict.get(m); String objOfStr = "";
                 if(objOf != null)
                     objOfStr = objOf.getTokenList().get(objOf.getTokenList().size()-1).toString().toLowerCase();
-                if(_objOfList.indexOf(objOfStr) > -1)
-                    fv.addFeature(currentIdx + _objOfList.indexOf(objOfStr) + 1, 1.0);
-                currentIdx += _objOfList.size() + 1;
+                currentIdx = addOneHotVector(objOfStr, fv, currentIdx, _objOfs, "obj_of", metaDict);
 
-                String left_prep = _prepDict_left.get(m);
-                if(left_prep != null && _prepositionList.indexOf(left_prep) > -1)
-                    fv.addFeature(currentIdx + _prepositionList.indexOf(left_prep) + 1, 1.0);
-                currentIdx += _prepositionList.size() + 1;
-                String right_prep = _prepDict_right.get(m);
-                if(right_prep != null && _prepositionList.indexOf(right_prep) > -1)
-                    fv.addFeature(currentIdx + _prepositionList.indexOf(right_prep) + 1, 1.0);
-                currentIdx += _prepositionList.size() + 1;
+                //right and left chunk types
+                Chunk[] chunkNeighbors = _mentionChunkNeighborDict.get(m);
+                String leftChunkType = "", rightChunkType = "";
+                if(chunkNeighbors != null && chunkNeighbors[0] != null)
+                    leftChunkType = chunkNeighbors[0].getChunkType();
+                if(chunkNeighbors != null && chunkNeighbors[1] != null)
+                    rightChunkType = chunkNeighbors[1].getChunkType();
+                currentIdx = addOneHotVector(leftChunkType, fv,
+                        currentIdx, _lefts, "left_chunk_type", metaDict);
+                currentIdx = addOneHotVector(rightChunkType, fv,
+                        currentIdx, _rights, "right_chunk_type", metaDict);
 
+                //pronouns
+                String pronomText = m.toString().toLowerCase();
+                currentIdx = addOneHotVector(pronomText, fv, currentIdx, _pronouns, "pronoun", metaDict);
+                String pronomType = m.getPronounType().toString();
+                currentIdx = addOneHotVector(pronomType, fv, currentIdx, _pronounTypes, "pronoun_type", metaDict);
+
+                //prepositions
+                String leftPrep = _prepDict_left.containsKey(m) ? _prepDict_left.get(m) : "";
+                String rightPrep = _prepDict_right.containsKey(m) ? _prepDict_right.get(m) : "";
+                currentIdx = addOneHotVector(leftPrep, fv, currentIdx,
+                        _prepositions, "left_preposition", metaDict);
+                currentIdx = addOneHotVector(rightPrep, fv, currentIdx,
+                        _prepositions, "right_preposition", metaDict);
+
+                //hypernyms
                 Set<String> hypSet = _hypDict.get(m.getHead().getLemma().toLowerCase());
+                int start = currentIdx;
                 for(String hyp : _hypernyms){
                     if(hypSet != null && hypSet.contains(hyp))
                         fv.addFeature(currentIdx, 1.0);
                     currentIdx++;
                 }
+                addMetaEntry("hypernym_bow", start, currentIdx, metaDict);
+                addMetaEntry("max_idx", currentIdx+1, metaDict);
+
                 fvSet.add(fv);
             }
         }
@@ -421,271 +468,254 @@ public abstract class ClassifyUtil {
         JsonIO.writeFile(metaDict, outroot + "_meta", false);
     }
 
-    private int addOneHotVector(FeatureVector fv, int currentIdx,
-                                List<String> oneHotList, String item)
+    /**Reads the given multiclass scores file into a mappng of IDs->scoreDistro;
+     * intended for use with pairwise and cardinality scores.
+     *
+     * @param filename
+     * @return
+     */
+    public static Map<String, double[]> readMccScoresFile(String filename)
     {
-        if(oneHotList.indexOf(item) > -1)
-            fv.addFeature(currentIdx + oneHotList.indexOf(item) + 1, 1.0);
-        return currentIdx + oneHotList.size() + 1;
-    }
-
-    private static List<Double> getMentionVector(String compType, Mention m) {
-        List<Double> emptyVec = new ArrayList<>();
-        for (int i = 0; i < 300; i++)
-            emptyVec.add(0.0);
-
-        Set<String> ignoredPOS = new HashSet<>();
-        ignoredPOS.add("DT");
-        ignoredPOS.add("CD");
-        ignoredPOS.add("PRP");
-        ignoredPOS.add("PRP$");
-
-        List<Double> vec = new ArrayList<>(emptyVec);
-        if (m.getPronounType() == Mention.PRONOUN_TYPE.NONE) {
-            List<List<Double>> vecList = new ArrayList<>();
-            for (Token t : m.getTokenList()) {
-                if (!ignoredPOS.contains(t.getPosTag())) {
-                    String word = StringUtil.keepAlpha(t.toString()).toLowerCase();
-                    if (!word.isEmpty())
-                        vecList.add(_w2vUtil.getVector(word));
-                }
-            }
-            if (vecList.size() > 0) {
-                switch (compType) {
-                    case "add":
-                        vec = Util.vectorAdd(vecList);
-                        break;
-                    case "mean":
-                        vec = Util.vectorMean(vecList);
-                        break;
-                    case "mult":
-                        vec = Util.vectorMean(vecList);
-                        break;
-                }
-            }
+        List<String> ll_scores = FileIO.readFile_lineList(filename);
+        Map<String, double[]> mccScores = new HashMap<>();
+        for(String line : ll_scores) {
+            String[] linePars = line.split(",");
+            double[] scores = new double[linePars.length-1];
+            for(int i=1; i<linePars.length; i++)
+                scores[i-1] = Math.exp(Double.parseDouble(linePars[i]));
+            mccScores.put(linePars[0], scores);
         }
-        return vec;
+        return mccScores;
     }
 
-    /**
-     * Returns a mapping of document IDs to a set of mention pairs,
-     * where the second mention in the pair is a pronominal, and
-     * the first is the antecedent with which it's coreferent
+    public static String getTypeCostLabel(Mention m)
+    {
+        switch(m.getPronounType()){
+            case SUBJECTIVE_SINGULAR:
+            case SUBJECTIVE_PLURAL:
+            case OBJECTIVE_SINGULAR:
+            case OBJECTIVE_PLURAL:
+            case REFLEXIVE_SINGULAR:
+            case REFLEXIVE_PLURAL:
+            case RECIPROCAL:
+                return "animate";
+            case SEMI:
+                return "semi";
+            case DEMONSTRATIVE:
+            case INDEFINITE:
+            case OTHER:
+            case RELATIVE:
+                return "other_pro";
+        }
+        return m.getLexicalType();
+    }
+
+    /**Exports the box-mention affinity features into a single file;
+     * all vectors are returned for dev/text, but -- for train --
+     * a random sampling of 10 mention-box pairs are given, per mention text
      *
      * @param docSet
-     * @return
+     * @param dataSplit
      */
-    @Deprecated
-    public static Map<String, Set<Mention[]>> _pronominalCoref(Collection<Document> docSet) {
-        Map<String, Set<Mention[]>> imgMentionPairDict = new HashMap<>();
-        WordnetUtil wnUtil = new WordnetUtil(Overlord.wordnetDir);
+    public static void exportFeatures_affinity(Collection<Document> docSet, String dataSplit)
+    {
+        List<Document> docList = new ArrayList<>(docSet);
 
-        for (Document d : docSet) {
-            for (Caption c : d.getCaptionList()) {
-                //start at the second mention, since first mentions cannot have valid antecedents
-                for (int i = 1; i < c.getMentionList().size(); i++) {
-                    Mention m_pronom = c.getMentionList().get(i);
-                    Mention.PRONOUN_TYPE pronounType = m_pronom.getPronounType();
+        Logger.log("Initializing stop words"); //stop words courtesy of http://www.ranks.nl/
+        _stopWords = new HashSet<>(FileIO.readFile_lineList(Overlord.resourcesDir + "stop_words.txt"));
 
-                    if (pronounType != Mention.PRONOUN_TYPE.NONE &&
-                            pronounType != Mention.PRONOUN_TYPE.INDEFINITE) {
-                        /** We want to assign coreference based on pronoun type,
-                         *  according to the below heuristics
-                         *
-                         *  1) Subjective / Objective / Special ("it")
-                         *     - Attach to furthest antecedent; usually main subject
-                         *  2) Reflexive / Reciprocal
-                         *     - Attach to the nearest antecedent; usually in same clause
-                         *  3) Relative / Special ("that")
-                         *     - If adjacent left neighbor is candidate, attach (NP [who/that])
-                         *     - If XofY construction, exclude X, attach to nearest
-                         *     - Otherwise attach nearest antecedent
-                         *  4) Indefinite
-                         *     - No attachment
-                         *  5) Other
-                         *     - "another", "other", "others"; no attachment
-                         *     - "both"; attach to a animate, 2-card antecedent
-                         *     - "one"; no attachment
-                         * */
-
-                        //collect left-to-right candidate antecedents
-                        List<Mention> candAnteList = new ArrayList<>();
-                        List<Mention> candAnteList_plural = new ArrayList<>();
-                        for (int j = i - 1; j >= 0; j--) {
-                            Mention m_ante = c.getMentionList().get(j);
-                            /* A mention may only be an agent pronoun antecedent if
-                             *   a) The cardinality of it and the pronoun are approximately equal
-                             *   b) The gender of it and the pronoun match
-                             */
-                            Boolean pluralPronom =
-                                    Mention.PRONOUN_TYPE.getIsPlural(m_pronom.toString().toLowerCase());
-                            boolean cardMatch = false;
-                            if (pluralPronom != null) {
-                                if (pluralPronom && m_ante.getCardinality().getValue() > 1) {
-                                    cardMatch = true;
-                                } else if (!pluralPronom && m_ante.getCardinality().getValue() == 1) {
-                                    cardMatch = true;
-                                }
-                            }
-                            if (cardMatch) {
-                                //we check gender last, since getting the hypernyms for
-                                //the antecedent is more costly than the other steps
-                                boolean genderMatch = getGenderMatch(m_pronom, m_ante);
-                                if (genderMatch) {
-                                    candAnteList.add(m_ante);
-                                    if (m_ante.getCardinality().getValue() > 1) {
-                                        candAnteList_plural.add(m_ante);
-                                    }
-                                }
-                            }
-
-                            //if we've collected plural candidates, that means
-                            //that our pronoun is ambiguous (ie. they); in these cases,
-                            //we should prefer plural antecedents to singular ones,
-                            //which in this case means dropping singular antecedents
-                            /*
-                            if(!candAnteList_plural.isEmpty())
-                                candAnteList = candAnteList_plural;
-                            */
-                        }
-
-
-                        //Determine coreference between mentions, as an {ante, pronom} pair
-                        Mention[] mentionPair = new Mention[2];
-                        mentionPair[1] = m_pronom;
-                        if (!candAnteList.isEmpty()) {
-                             /* 1) Subjective / Objective */
-                            if (pronounType == Mention.PRONOUN_TYPE.SUBJECTIVE_SINGULAR ||
-                                    pronounType == Mention.PRONOUN_TYPE.SUBJECTIVE_PLURAL ||
-                                    pronounType == Mention.PRONOUN_TYPE.OBJECTIVE_SINGULAR ||
-                                    pronounType == Mention.PRONOUN_TYPE.OBJECTIVE_PLURAL ||
-                                    m_pronom.toString().toLowerCase().equals("it")) {
-                                mentionPair[0] = candAnteList.get(candAnteList.size() - 1);
-                            }
-                            /* 2) Reflexive */
-                            else if (pronounType == Mention.PRONOUN_TYPE.REFLEXIVE_SINGULAR ||
-                                    pronounType == Mention.PRONOUN_TYPE.REFLEXIVE_PLURAL ||
-                                    pronounType == Mention.PRONOUN_TYPE.RECIPROCAL) {
-                                mentionPair[0] = candAnteList.get(0);
-                            }
-                            /* 3) Relative */
-                            else if (pronounType == Mention.PRONOUN_TYPE.RELATIVE ||
-                                    m_pronom.toString().toLowerCase().equals("that")) {
-                                String normText = m_pronom.toString().toLowerCase().trim();
-                                List<Token> interstitialTokens =
-                                        c.getTokenList().subList(candAnteList.get(0).getTokenRange()[1],
-                                                m_pronom.getTokenRange()[0] + 1);
-                                String interstitialStr = StringUtil.listToString(interstitialTokens, " ");
-
-                                //If adjacent left neighbor is a candidate; attach
-                                if (candAnteList.get(0).getTokenRange()[1] + 1 ==
-                                        m_pronom.getTokenRange()[0]) {
-                                    mentionPair[0] = candAnteList.get(0);
-                                }
-                                //If pronoun is Y in XofY, exclude X, attach to nearest
-                                else if (interstitialStr.equals("of")) {
-                                    candAnteList.remove(0);
-                                    if (!candAnteList.isEmpty())
-                                        mentionPair[0] = candAnteList.get(0);
-                                }
-                                //Otherwise, attach to nearest
-                                else {
-                                    mentionPair[0] = candAnteList.get(0);
-                                }
-                            } else if (pronounType == Mention.PRONOUN_TYPE.OTHER) {
-                                if (m_pronom.toString().toLowerCase().equals("both")) {
-                                    for (int k = 0; k < candAnteList.size(); k++) {
-                                        Mention candAnte = candAnteList.get(k);
-                                        if (candAnte.getCardinality().getValue() == 2 &&
-                                                !candAnte.getCardinality().isUnderdef()) {
-                                            mentionPair[0] = candAnteList.get(k);
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-
-                            /* C7) ignore candidate pronouns with
-                             *     multiple candidate antecedents
-                             *     that appear in a [NP ... and ... NP ...] structure
-                             */
-                            /*
-                            String pattern_list = "^.*(NP (PP |NP |ADJP )*(, )?)+(and (NP)).*$";
-                            if(candAnteList.size() > 1 && c.toChunkTypeString(true).matches(pattern_list)){
-                                continue;
-                            }*/
-                        }
-                        //if we haven't set the antecedent; log this caption
-                        if (mentionPair[0] != null) {
-                            if (!imgMentionPairDict.containsKey(d.getID()))
-                                imgMentionPairDict.put(d.getID(), new HashSet<>());
-                            imgMentionPairDict.get(d.getID()).add(mentionPair);
-                        }
-                    }
+        Logger.log("Reading vocabulary from documents");
+        Set<String> vocabulary = new HashSet<>();
+        for (Document d : docList){
+            for (Mention m : d.getMentionList()){
+                for (Token t : m.getTokenList()) {
+                    String text = t.toString().toLowerCase().trim();
+                    if (!_stopWords.contains(text) && StringUtil.hasAlphaNum(text))
+                        vocabulary.add(text);
                 }
             }
         }
-        return imgMentionPairDict;
-    }
 
-    /**
-     * Performs intra-caption pronominal subset prediction (pronominal and not),
-     * returning a mapping of [docID -> {(super, sub) ...}]
-     *
-     * @param docSet
-     * @return
-     */
-    @Deprecated
-    public static Map<String, Set<Mention[]>> pronomSubset(Collection<Document> docSet) {
-        Map<String, Set<Mention[]>> subsetDict = new HashMap<>();
-        for (Document d : docSet) {
-            Set<Mention[]> subsets = new HashSet<>();
-            for (Caption c : d.getCaptionList()) {
-                for (int i = 0; i < c.getMentionList().size(); i++) {
-                    Mention m1 = c.getMentionList().get(i);
-                    Mention[] supSub = null;
-                    for (int j = i - 1; j >= 0; j--) {
-                        Mention m2 = c.getMentionList().get(j);
+        Logger.log("Loading Word2Vec for vocabulary");
+        _w2vUtil = new Word2VecUtil(Overlord.word2vecPath, vocabulary);
 
-                        /* In the pronominal case, we're interested in one of two
-                         * conditions
-                         *      a) m1 is (non-indef) pronom; antecedent is a superset
-                         *      b) m1 is (non-indef) pronom; antecedent is a subset
-                         */
-                        if (m1.getPronounType() != Mention.PRONOUN_TYPE.NONE &&
-                                m1.getPronounType() != Mention.PRONOUN_TYPE.INDEFINITE &&
-                                m2.getPronounType() == Mention.PRONOUN_TYPE.NONE) {
-                            Cardinality c1 = m1.getCardinality();
-                            Cardinality c2 = m2.getCardinality();
+        Logger.log("Preprocessing documents");
+        Set<String> boxFiles = new HashSet<>();
+        File boxDir = new File(Overlord.boxFeatureDir);
+        for(File f : boxDir.listFiles())
+            if(f.isFile())
+                boxFiles.add(f.getName().replace(".feats", ""));
 
-                            //We dictate which is a subset of which based on
-                            //cardinality.
-                            //1 sub 2 (unambig); 2 sub 1 unambig
-                            if (!c1.isUnderdef() && !c2.isUnderdef()) {
-                                if (c1.getValue() < c2.getValue())
-                                    supSub = new Mention[]{m2, m1};
-                                else if (c2.getValue() < c1.getValue())
-                                    supSub = new Mention[]{m1, m2};
-                            } //2 sub 1
-                            else if (c1.isUnderdef() && !c2.isUnderdef()) {
-                                supSub = new Mention[]{m1, m2};
-                            } //1 sub 2
-                            else if (!c1.isUnderdef() && c2.isUnderdef()) {
-                                supSub = new Mention[]{m2, m1};
-                            }
-                        }
-                    }
-
-                    if (supSub != null)
-                        subsets.add(supSub);
+        List<String> ll_affinity = new ArrayList<>();
+        if(dataSplit.equals("train")){
+            ll_affinity.addAll(_exportFeatures_affinity_train(docSet, boxFiles));
+        } else {
+            List<String> ll_types = new ArrayList<>();
+            int docIdx = 0;
+            for(Document d : docList){
+                List<String> ll_fvStr = FileIO.readFile_lineList(Overlord.boxFeatureDir + d.getID().replace(".jpg", ".feats"));
+                Map<String, List<Double>> fvDict = new HashMap<>();
+                for(String fvStr : ll_fvStr){
+                    FeatureVector fv = FeatureVector.parseFeatureVector(fvStr);
+                    List<Double> boxFeats = new ArrayList<>();
+                    for (int i = 1; i <= 4096; i++)
+                        boxFeats.add(fv.getFeatureValue(i));
+                    fvDict.put(fv.comments, boxFeats);
                 }
+                for(Mention m : d.getMentionList()){
+                    Set<BoundingBox> boxSet = d.getBoxSetForMention(m);
+                    for(BoundingBox b : d.getBoundingBoxSet()){
+                        int label = boxSet.contains(b) ? 1 : 0;
+                        String ID = m.getUniqueID() + "|" + b.getUniqueID();
+                        List<Double> feats_affinity = new ArrayList<>();
+                        fvDict.get(b.getUniqueID()).stream().forEachOrdered(v -> feats_affinity.add(v));
+                        _w2vUtil.getVector(m.toString().toLowerCase().trim()).stream().forEachOrdered(v -> feats_affinity.add(v));
+                        ll_affinity.add(ID + "," + label + "," + StringUtil.listToString(feats_affinity, ","));
+                        ll_types.add(ID + "," + m.getLexicalType());
+                    }
+                }
+                docIdx++;
+                Logger.logStatus("complete (%.2f%%)", 100.0 * (double)docIdx /
+                        docSet.size());
             }
-            if (!subsets.isEmpty())
-                subsetDict.put(d.getID(), subsets);
+            FileIO.writeFile(ll_types, Overlord.dataPath +
+                    "feats/affinity_feats_" + dataSplit + "_type", "csv", false);
         }
-        return subsetDict;
+
+        FileIO.writeFile(ll_affinity, Overlord.dataPath +
+                "feats/affinity_feats_" + dataSplit, "feats", false);
     }
 
+    private static List<String> _exportFeatures_affinity_train(Collection<Document> docSet, Set<String> boxFiles)
+    {
+        List<String> ll_affinity = new ArrayList<>();
+
+        //Store a mapping of [docID -> [mention -> [bounding boxes] ] ]
+        Map<String, Map<Mention, Set<BoundingBox>>>
+                mentionBoxesDict = new HashMap<>();
+        Map<String, String> typeDict = new HashMap<>();
+        Map<Mention, Document> mentionDocDict = new HashMap<>();
+        for(Document d : docSet){
+            if(boxFiles.contains(d.getID().replace(".jpg", ""))){
+                for(Mention m : d.getMentionList()){
+                    mentionDocDict.put(m, d);
+                    String normText = m.toString().toLowerCase().trim();
+                    if(!mentionBoxesDict.containsKey(normText)) {
+                        mentionBoxesDict.put(normText, new HashMap<>());
+                        typeDict.put(normText, m.getLexicalType());
+                    }
+                    mentionBoxesDict.get(normText).put(m, d.getBoxSetForMention(m));
+                }
+            } else {
+                System.out.println("ERROR: found no box feats for " + d.getID());
+            }
+        }
+
+        //Randomly sample 10 bounding boxes from those that have boxes if
+        //we're subsampling
+        Map<String, Set<BoundingBox>> mentionBoxesDict_pos = new HashMap<>();
+        Map<String, Set<BoundingBox>> mentionBoxesDict_neg = new HashMap<>();
+        for(String normText : mentionBoxesDict.keySet()){
+            List<BoundingBox> boxList_pos = new ArrayList<>();
+            List<BoundingBox> boxList_neg = new ArrayList<>();
+            for(Mention m : mentionBoxesDict.get(normText).keySet()){
+                boxList_pos.addAll(mentionBoxesDict.get(normText).get(m));
+                Document d = mentionDocDict.get(m);
+                Set<BoundingBox> boxSet = new HashSet<>(d.getBoundingBoxSet());
+                boxSet.removeAll(d.getBoxSetForMention(m));
+                boxList_neg.addAll(boxSet);
+            }
+            if(!boxList_pos.isEmpty() && !boxList_neg.isEmpty()){
+                Collections.shuffle(boxList_pos);
+                Collections.shuffle(boxList_neg);
+                mentionBoxesDict_pos.put(normText, new HashSet<>(boxList_pos.subList(0, Math.min(boxList_pos.size()-1, 10))));
+                mentionBoxesDict_neg.put(normText, new HashSet<>(boxList_neg.subList(0, Math.min(boxList_neg.size()-1, 10))));
+            }
+        }
+
+        int txtIdx = 0;
+        for(String normText : mentionBoxesDict_pos.keySet()){
+            List<Double> feats_txt = _w2vUtil.getVector(normText);
+
+            //Since we don't know which image word's box will come from
+            //a-priori, open the doc's file at each box (less efficient, but necessary)
+            for(BoundingBox b : mentionBoxesDict_pos.get(normText)){
+                List<Double> feats_img = null;
+                try {
+                    BufferedReader br = new BufferedReader(new InputStreamReader(
+                            new FileInputStream(Overlord.boxFeatureDir +
+                                    b.getDocID().replace(".jpg", ".feats"))));
+                    String nextLine = br.readLine();
+                    while (nextLine != null && feats_img == null) {
+                        String fvID = nextLine.split(" # ")[1];
+                        if (fvID.equals(b.getUniqueID())) {
+                            FeatureVector fv = FeatureVector.parseFeatureVector(nextLine);
+                            feats_img = new ArrayList<>();
+                            for (int i = 1; i <= 4096; i++)
+                                feats_img.add(fv.getFeatureValue(i));
+                        }
+                        nextLine = br.readLine();
+                    }
+                    br.close();
+                    txtIdx++;
+                    Logger.logStatus("text complete (%.2f%%)", 100.0 * (double)txtIdx /
+                            (mentionBoxesDict_pos.keySet().size() * 2));
+                } catch(Exception ex){Logger.log(ex);}
+
+                if(feats_img == null){
+                    Logger.log("ERROR: found no feats for " + b.getUniqueID());
+                    continue;
+                }
+
+                List<Double> feats_affinity = new ArrayList<>();
+                feats_img.stream().forEachOrdered(v -> feats_affinity.add(v));
+                feats_txt.stream().forEachOrdered(v -> feats_affinity.add(v));
+                String ID = typeDict.get(normText); //add the type instead of the ID, because train has no ID
+                ll_affinity.add(ID + ",1," + StringUtil.listToString(feats_affinity, ","));
+            }
+        }
+        for(String normText : mentionBoxesDict_neg.keySet()){
+            List<Double> feats_txt = _w2vUtil.getVector(normText);
+
+            //Since we don't know which image word's box will come from
+            //a-priori, open the doc's file at each box (less efficient, but necessary)
+            for(BoundingBox b : mentionBoxesDict_pos.get(normText)){
+                List<Double> feats_img = null;
+                try {
+                    BufferedReader br = new BufferedReader(new InputStreamReader(
+                            new FileInputStream(Overlord.boxFeatureDir +
+                                    b.getDocID().replace(".jpg", ".feats"))));
+                    String nextLine = br.readLine();
+                    while (nextLine != null && feats_img == null) {
+                        String fvID = nextLine.split(" # ")[1];
+                        if (fvID.equals(b.getUniqueID())) {
+                            FeatureVector fv = FeatureVector.parseFeatureVector(nextLine);
+                            feats_img = new ArrayList<>();
+                            for (int i = 1; i <= 4096; i++)
+                                feats_img.add(fv.getFeatureValue(i));
+                        }
+                        nextLine = br.readLine();
+                    }
+                    br.close();
+                    txtIdx++;
+                    Logger.logStatus("text complete (%.2f%%)", 100.0 * (double)txtIdx /
+                            (mentionBoxesDict_neg.keySet().size() * 2));
+                } catch(Exception ex){Logger.log(ex);}
+
+                if(feats_img == null){
+                    Logger.log("ERROR: found no feats for " + b.getUniqueID());
+                    continue;
+                }
+
+                List<Double> feats_affinity = new ArrayList<>();
+                feats_img.stream().forEachOrdered(v -> feats_affinity.add(v));
+                feats_txt.stream().forEachOrdered(v -> feats_affinity.add(v));
+                String ID = typeDict.get(normText); //add the type instead of the ID, because train has no ID
+                ll_affinity.add(ID + ",0," + StringUtil.listToString(feats_affinity, ","));
+            }
+        }
+        return ll_affinity;
+    }
 
     /**Evaluates the pronominal coreference system, where the score dict
      * is computed over all the links where at least one mention is
@@ -694,184 +724,217 @@ public abstract class ClassifyUtil {
      * @param docSet
      * @return
      */
-    public static ScoreDict<Integer> evaluatePronomCoref(Collection<Document> docSet) {
+    public static ScoreDict<Integer> evaluatePronomCoref(Collection<Document> docSet,
+         BinaryClassifierScoreDict nonvisualScoreDict)
+    {
         ScoreDict<Integer> scores = new ScoreDict<>();
         for(Document d : docSet){
-            Map<Mention[], String> pronomCases = Minion.filter_pronomCorefEval(d);
-            for(Mention[] pair : pronomCases.keySet()){
-                String caseStr = pronomCases.get(pair);
-                int gold = caseStr.contains("gold") ? 1 : 0;
-                int pred = caseStr.contains("pred") ? 1 : 0;
-                scores.increment(gold, pred);
+            List<Mention> mentions = d.getMentionList();
+
+            //get the set of visual mentions (either predicted or gold)
+            Set<Mention> visualMentions = new HashSet<>();
+            for(Mention m : mentions){
+                boolean isNonvis = m.getChainID().equals("0");
+                if(nonvisualScoreDict != null){
+                    Double nonvisScore = nonvisualScoreDict.get(m);
+                    isNonvis = nonvisScore != null && nonvisScore > 0;
+                }
+                if(!isNonvis)
+                    visualMentions.add(m);
+            }
+
+            Set<String> pronomCoref = pronominalCoref(d, visualMentions);
+            for(int i=0; i<mentions.size(); i++) {
+                Mention m_i = mentions.get(i);
+                Mention.PRONOUN_TYPE pType_i = m_i.getPronounType();
+                for (int j = i + 1; j < mentions.size(); j++) {
+                    Mention m_j = mentions.get(j);
+                    Mention.PRONOUN_TYPE pType_j = m_j.getPronounType();
+
+                    //We only care about same-caption links where one end is a pronoun
+                    if(m_i.getCaptionIdx() != m_j.getCaptionIdx())
+                        continue;
+                    if(pType_i != Mention.PRONOUN_TYPE.NONE && pType_i != Mention.PRONOUN_TYPE.SEMI ||
+                       pType_j != Mention.PRONOUN_TYPE.NONE && pType_j != Mention.PRONOUN_TYPE.SEMI){
+                        int gold = !m_i.getChainID().equals("0") &&
+                                   m_i.getChainID().equals(m_j.getChainID()) ? 1 : 0;
+
+                        String id_ij = Document.getMentionPairStr(m_i, m_j);
+                        String id_ji = Document.getMentionPairStr(m_j, m_i);
+                        int pred = pronomCoref.contains(id_ij) ||
+                                   pronomCoref.contains(id_ji) ? 1 : 0;
+
+                        scores.increment(gold, pred);
+                    }
+                }
             }
         }
         return scores;
     }
 
-    public static Set<String> pronominalCoref(Document d)
+    /**Performs heuristic pronominal coreference resolution, according
+     * to the following:
+     *
+     * 1) Subject / Object pronouns
+     *      - Attach to the furthest antecedent; preference to animate
+     * 2) Reflexive / Reciprocal
+     *      - Attach to the nearest antecedent; preference to animate
+     * 3) Relative
+     *      - Exclude X if Y in XofY; attach to nearest
+     *      - Attach to S if in [R] [to be / like] [S] construction
+     * 4) Indefinite
+     *      - No attachment
+     * 5) "both", "all", and "it" refer to the nearest antecedent
+     *
+     * @param d
+     * @return
+     */
+    public static Set<String> pronominalCoref(Document d, Collection<Mention> visualMentions)
     {
+        String[] singMods = {"one", "1", "first", "second", "third"};
+        String[] undefPronom = {"that", "which", "who", "whom", "what"};
+        String[] identityTerms = {"to be", "like"};
+
         Set<String> corefPairs = new HashSet<>();
-        for (Caption c : d.getCaptionList()) {
+        for(Caption c : d.getCaptionList()) {
 
-            //start at the second mention, since we're only concerned with
-            //pronominal mentions with non-pronominal antecedents
-            for (int i = 1; i < c.getMentionList().size(); i++) {
-                Mention m_pronom = c.getMentionList().get(i);
+            List<Mention> mentions = c.getMentionList();
+            for(int i=0; i<mentions.size(); i++){
+                Mention m_pronom = mentions.get(i);
                 Mention.PRONOUN_TYPE pronounType = m_pronom.getPronounType();
+                Boolean pluralPronom =
+                        Mention.PRONOUN_TYPE.getIsPlural(m_pronom.toString().toLowerCase());
 
-                //both subset and coreference relations only occur between
-                //non-indefinite pronouns
-                if (pronounType != Mention.PRONOUN_TYPE.NONE &&
-                    pronounType != Mention.PRONOUN_TYPE.INDEFINITE &&
-                    pronounType != Mention.PRONOUN_TYPE.SEMI) {
+                //if this isn't a full pronoun, we need not concern ourselves
+                if(pronounType == Mention.PRONOUN_TYPE.NONE || pronounType == Mention.PRONOUN_TYPE.SEMI)
+                    continue;
 
-                    //collect left-to-right candidate antecedents
-                    List<Mention> candAnteList = new ArrayList<>();
-                    for (int j = i - 1; j >= 0; j--) {
-                        Mention m_ante = c.getMentionList().get(j);
-                        if (m_ante.getPronounType() == Mention.PRONOUN_TYPE.NONE)
-                            candAnteList.add(m_ante);
+                //Now that we know m_i is a pronoun, we're going to collect
+                //all mentions (left and right) that could be candidates
+                List<Mention> leftCandidates = new ArrayList<>(), rightCandidates = new ArrayList<>();
+                for(int j=0; j<mentions.size(); j++){
+                    if(j == i)
+                        continue;
+
+                    Mention m_j = mentions.get(j);
+
+                    //if this isn't one of the visual mentions, bail
+                    if(!visualMentions.contains(m_j))
+                        continue;
+
+                    //If we've already added this pairing, ignore it now
+                    String id_ij = Document.getMentionPairStr(m_pronom, m_j);
+                    String id_ji = Document.getMentionPairStr(m_j, m_pronom);
+                    if(corefPairs.contains(id_ij) || corefPairs.contains(id_ji))
+                        continue;
+
+                    //Only add non-pronominal mentions
+                    if(m_j.getPronounType() != Mention.PRONOUN_TYPE.NONE)
+                        continue;
+
+                    //Determine mention j's plurality
+                    String[] mods = m_j.getModifiers();
+                    boolean plural_j = false;
+                    if(m_j.getHead().getPosTag().equals("NNS") ||
+                       m_j.getHead().getPosTag().equals("NNPS")){
+                        plural_j = true;
+                    } else if(!mods[0].isEmpty() &&
+                              !Arrays.asList(singMods).contains(mods[0])) {
+                        plural_j = true;
                     }
-                    if (candAnteList.isEmpty())
-                        continue;   //we can't attach anything that has no antecedents
-
-                    //Determine a relation, either as
-                    //  {ante, pronom} pair (coref)
-                    //  {sub, sup} pair (subset)
-                    Mention[] pair = null;
-
-                    /** We want to assign coreference based on pronoun type,
-                     *  according to the below heuristics
-                     *
-                     *  1) Subjective / Objective / Special ("it")
-                     *     - Attach to furthest antecedent; usually main subject
-                     *  2) Reflexive / Reciprocal
-                     *     - Attach to the nearest antecedent; usually in same clause
-                     *  3) Relative / Special ("that")
-                     *     - If adjacent left neighbor is candidate, attach (NP [who/that])
-                     *     - If XofY construction, exclude X, attach to nearest
-                     *     - Otherwise attach nearest antecedent
-                     *  4) Indefinite
-                     *     - No attachment
-                     *  5) Other
-                     *     - "another", "other", "others"; no attachment
-                     *     - "both"; attach to a animate, 2-card antecedent
-                     *     - "one"; no attachment
-                     */
-
-                    //Retain only the antecedents that have the correct numerical
-                    //modifier
-                    List<Mention> candAnteList_coref = new ArrayList<>();
-                    for (Mention m : candAnteList) {
-                        Boolean pluralPronom = Mention.PRONOUN_TYPE.getIsPlural(m_pronom.toString().toLowerCase());
-                        if (pluralPronom != null) {
-                            /* //Removing cardinality
-                            if ((pluralPronom && m.getCardinality().getValue() > 1) ||
-                                (!pluralPronom && m.getCardinality().getValue() == 1)) {
-                                if (getGenderMatch(m_pronom, m))
-                                    candAnteList_coref.add(m);
-                            }*/
-                            String[] singMods = {"one", "1", "first", "second", "third"};
-
-                            String[] mods = m.getModifiers();
-                            boolean pluralAnte = false;
-                            if(m.getHead().getPosTag().equals("NNS") ||
-                               m.getHead().getPosTag().equals("NNPS")){
-                                pluralAnte = true;
-                            } else if(!mods[0].isEmpty() &&
-                                      !Arrays.asList(singMods).contains(mods[0])) {
-                                pluralAnte = true;
-                            }
-
-                            //if the pronoun is which/who/that/them,
-                            //attach everything regardless of plurality
-                            String[] specialPronouns = {"which", "who", "that"};
-                            if(Arrays.asList(specialPronouns).contains(m_pronom.toString().toLowerCase())) {
-                                candAnteList_coref.add(m);
-                            } else if (pluralPronom && pluralAnte || !pluralPronom && !pluralAnte) {
-                                if (getGenderMatch(m_pronom, m))
-                                    candAnteList_coref.add(m);
-                            }
+                    if(getGenderMatch(m_pronom, m_j)){
+                        //The underdefined pronouns match everything; other candidates
+                        //must have matching plurality
+                        if(Arrays.asList(undefPronom).contains(m_pronom.toString().toLowerCase()) ||
+                           pluralPronom != null && (pluralPronom && plural_j || !pluralPronom && !plural_j)){
+                            if(j < i)
+                                leftCandidates.add(m_j);
+                            else if(j > i)
+                                rightCandidates.add(m_j);
                         }
                     }
+                }
 
-                    //
-                    int lastIdx = candAnteList_coref.size() - 1;
-                    if (!candAnteList_coref.isEmpty()) {
-                        if(m_pronom.toString().equalsIgnoreCase("it")){
-                            pair = new Mention[]{candAnteList_coref.get(0), m_pronom};
-                        } /* 1) Subjective / Objective */
-                        else if (pronounType == Mention.PRONOUN_TYPE.SUBJECTIVE_SINGULAR ||
-                            pronounType == Mention.PRONOUN_TYPE.SUBJECTIVE_PLURAL ||
-                            pronounType == Mention.PRONOUN_TYPE.OBJECTIVE_SINGULAR ||
-                            pronounType == Mention.PRONOUN_TYPE.OBJECTIVE_PLURAL) {
+                Mention[] pair = null;
 
-                            Mention ante = candAnteList_coref.get(lastIdx);
-                            //Prefer people/animal pronouns, where available
-                            for(int j=lastIdx; j>=0; j--){
-                                Mention m_j = candAnteList_coref.get(j);
-                                if(m_j.getLexicalType().contains("people") ||
-                                   m_j.getLexicalType().contains("animals")){
-                                    ante = candAnteList_coref.get(j);
-                                    break;
-                                }
-                            }
-                            pair = new Mention[]{ante, m_pronom};
-                        } /* 2) Reflexive */
-                        else if (pronounType == Mention.PRONOUN_TYPE.REFLEXIVE_SINGULAR ||
-                                 pronounType == Mention.PRONOUN_TYPE.REFLEXIVE_PLURAL ||
-                                 pronounType == Mention.PRONOUN_TYPE.RECIPROCAL) {
+                /* 1) Subjective / Objective */
+                if ((pronounType == Mention.PRONOUN_TYPE.SUBJECTIVE_SINGULAR ||
+                    pronounType == Mention.PRONOUN_TYPE.SUBJECTIVE_PLURAL ||
+                    pronounType == Mention.PRONOUN_TYPE.OBJECTIVE_SINGULAR ||
+                    pronounType == Mention.PRONOUN_TYPE.OBJECTIVE_PLURAL) &&
+                    !leftCandidates.isEmpty()) {
 
-                            Mention ante = candAnteList_coref.get(0);
-                            //Prefer people/animal pronouns, where available
-                            for(int j=0; j<=lastIdx; j++){
-                                Mention m_j = candAnteList_coref.get(j);
-                                if(m_j.getLexicalType().contains("people") ||
-                                   m_j.getLexicalType().contains("animals")){
-                                    ante = candAnteList_coref.get(j);
-                                    break;
-                                }
-                            }
-                            pair = new Mention[]{ante, m_pronom};
-                        } /* 3) Relative */
-                        else if (pronounType == Mention.PRONOUN_TYPE.RELATIVE ||
-                                m_pronom.toString().toLowerCase().equals("that")) {
-                            List<Token> interstitialTokens =
-                                    c.getTokenList().subList(candAnteList_coref.get(0).getTokenRange()[1],
-                                            m_pronom.getTokenRange()[0] + 1);
-                            String interstitialStr = StringUtil.listToString(interstitialTokens, " ");
-
-                            //If adjacent left neighbor is a candidate; attach
-                            if (candAnteList_coref.get(0).getTokenRange()[1] + 1 ==
-                                    m_pronom.getTokenRange()[0]) {
-                                pair = new Mention[]{candAnteList_coref.get(0), m_pronom};
-                            }
-                            //If pronoun is Y in XofY, exclude X, attach to nearest
-                            else if (interstitialStr.equals("of")) {
-                                candAnteList_coref.remove(0);
-                                if (!candAnteList_coref.isEmpty())
-                                    pair = new Mention[]{candAnteList_coref.get(0), m_pronom};
-                            }
-                            //Otherwise, attach to nearest
-                            else {
-                                pair = new Mention[]{candAnteList_coref.get(0), m_pronom};
-                            }
-                        } /* 4) Other */ else if (pronounType == Mention.PRONOUN_TYPE.OTHER) {
-                            if (m_pronom.toString().toLowerCase().equals("both")) {
-                                for (int k = 0; k < candAnteList_coref.size(); k++) {
-                                    Mention candAnte = candAnteList_coref.get(k);
-                                    String[] mods = candAnte.getModifiers();
-                                    if(mods[0].equals("two") || mods[0].equals("2"))
-                                        pair = new Mention[]{candAnte, m_pronom};
-                                }
-                            }
+                    //Furthest antecedent is left, index 0
+                    Mention ante = leftCandidates.get(0);
+                    //Prefer people/animal antecedents, where available
+                    for(int j=0; j<leftCandidates.size(); j++){
+                        Mention m_j = leftCandidates.get(j);
+                        if(m_j.getLexicalType().contains("people") || m_j.getLexicalType().contains("animals")){
+                            ante = m_j; break;
                         }
                     }
-
-                    if(pair != null){
-                        corefPairs.add(Document.getMentionPairStr(pair[0], pair[1], true, true));
-                        corefPairs.add(Document.getMentionPairStr(pair[1], pair[0], true, true));
+                    pair = new Mention[]{ante, m_pronom};
+                } /* 2) Reflexive */
+                else if ((pronounType == Mention.PRONOUN_TYPE.REFLEXIVE_SINGULAR ||
+                        pronounType == Mention.PRONOUN_TYPE.REFLEXIVE_PLURAL ||
+                        pronounType == Mention.PRONOUN_TYPE.RECIPROCAL) &&
+                        !leftCandidates.isEmpty()) {
+                    //Nearest antecedent is left, max idx
+                    Mention ante = leftCandidates.get(leftCandidates.size()-1);
+                    //Prefer people/animal antecedents, where available
+                    for(int j=leftCandidates.size()-1; j>= 0; j--){
+                        Mention m_j = leftCandidates.get(j);
+                        if(m_j.getLexicalType().contains("people") || m_j.getLexicalType().contains("animals")){
+                            ante = m_j; break;
+                        }
                     }
+                    pair = new Mention[]{ante, m_pronom};
+                } /* 3) Relative */
+                else if (pronounType == Mention.PRONOUN_TYPE.RELATIVE || m_pronom.toString().equals("that")) {
+                    Mention m_left = null;
+                    List<Token> interstl_left = new ArrayList<>();
+                    if(!leftCandidates.isEmpty()){
+                        m_left = leftCandidates.get(leftCandidates.size()-1);
+                        interstl_left = c.getInterstitialTokens(m_left, m_pronom);
+                    }
+                    Mention m_right = null;
+                    List<Chunk> interstl_right = new ArrayList<>();
+                    if(!rightCandidates.isEmpty()){
+                        m_right = rightCandidates.get(0);
+                        interstl_right = c.getInterstitialChunks(m_pronom, m_right);
+                    }
+
+                    //If this is Y in XofY, drop X
+                    if(interstl_left.size() == 1 && interstl_left.get(0).toString().equals("of") &&
+                       leftCandidates.size() > 1){
+                        m_left = leftCandidates.get(leftCandidates.size()-2);
+                    }
+
+                    //Determine if this is one of our identity cases
+                    boolean identityCase = false;
+                    if(interstl_right.size() == 1){
+                        String chunkType = interstl_right.get(0).getChunkType();
+                        String chunkStr = interstl_right.get(0).toString().toLowerCase();
+                        identityCase = chunkType.equals("VP") &&
+                                (StringUtil.containsElement(Arrays.asList(identityTerms), chunkStr) ||
+                                chunkStr.equals("is") || chunkStr.equals("are"));
+                    }
+
+                    //Either attach on the right because we're an identity case,
+                    //or attach left if we have a valid antecedent
+                    if(identityCase){
+                        pair = new Mention[]{m_pronom, m_right};
+                    } else if(m_left != null) {
+                        pair = new Mention[]{m_left, m_pronom};
+                    }
+                } /* 4) Other */
+                else if (pronounType == Mention.PRONOUN_TYPE.OTHER && !leftCandidates.isEmpty()) {
+                    pair = new Mention[]{leftCandidates.get(leftCandidates.size()-1), m_pronom};
+                }
+
+                if(pair != null){
+                    corefPairs.add(Document.getMentionPairStr(pair[0], pair[1]));
+                    corefPairs.add(Document.getMentionPairStr(pair[1], pair[0]));
                 }
             }
         }
@@ -1189,409 +1252,6 @@ public abstract class ClassifyUtil {
         return constructionList;
     }
 
-    private static int getChunkTypeMatch(String chunkType_1, String chunkType_2) {
-        int typeMatch = UNK;
-        if (chunkType_1 == null && chunkType_2 == null)
-            typeMatch = TRUE;
-        else if (chunkType_1 == null && chunkType_2 != null)
-            typeMatch = FALSE;
-        else if (chunkType_1 != null && chunkType_2 == null)
-            typeMatch = FALSE;
-        else
-            typeMatch = chunkType_1.equals(chunkType_2) ? TRUE : FALSE;
-        return typeMatch;
-    }
-
-    /**
-     * Returns the given mention's governing VP chunk, in the given
-     * caption; returns null if the mention has no governing VP or
-     * if the caption has no root dependency node
-     *
-     * @param m
-     * @param c
-     * @return
-     */
-    private static Chunk getOwningVP(Mention m, Caption c) {
-        DependencyNode rootNode = c.getRootNode();
-        if (rootNode != null) {
-            DependencyNode node = rootNode.findDependent(m.getHead());
-            for (Integer chunkIdx : node.getGoverningChunkIndices()) {
-                if (chunkIdx >= 0 && chunkIdx < c.getChunkList().size()) {
-                    Chunk ch = c.getChunkList().get(chunkIdx);
-                    if (ch.getChunkType().equals("VP"))
-                        return ch;
-                }
-            }
-        }
-        return null;
-    }
-
-
-    public static void export_affinityFeats(Collection<Document> docSet, String dataSplit)
-    {
-        List<Document> docList = new ArrayList<>(docSet);
-
-        Logger.log("Initializing stop words"); //stop words courtesy of http://www.ranks.nl/
-        _stopWords = new HashSet<>(FileIO.readFile_lineList(Overlord.resourcesDir + "stop_words.txt"));
-
-        Logger.log("Reading vocabulary from documents");
-        Set<String> vocabulary = new HashSet<>();
-        for (Document d : docList){
-            for (Mention m : d.getMentionList()){
-                for (Token t : m.getTokenList()) {
-                    String text = t.toString().toLowerCase().trim();
-                    if (!_stopWords.contains(text) && StringUtil.hasAlphaNum(text))
-                        vocabulary.add(text);
-                }
-            }
-        }
-
-        Logger.log("Loading Word2Vec for vocabulary");
-        _w2vUtil = new Word2VecUtil(Overlord.word2vecPath, vocabulary);
-
-        Logger.log("Preprocessing documents");
-        Set<String> boxFiles = new HashSet<>();
-        File boxDir = new File(Overlord.boxFeatureDir);
-        for(File f : boxDir.listFiles())
-            if(f.isFile())
-                boxFiles.add(f.getName().replace(".feats", ""));
-
-        List<String> ll_affinity = new ArrayList<>();
-        if(dataSplit.equals("train")){
-            ll_affinity.addAll(export_affinityFeats_train(docSet, boxFiles));
-        } else {
-            int docIdx = 0;
-            for(Document d : docList){
-                List<String> ll_fvStr = FileIO.readFile_lineList(Overlord.boxFeatureDir + d.getID().replace(".jpg", ".feats"));
-                Map<String, List<Double>> fvDict = new HashMap<>();
-                for(String fvStr : ll_fvStr){
-                    FeatureVector fv = FeatureVector.parseFeatureVector(fvStr);
-                    List<Double> boxFeats = new ArrayList<>();
-                    for (int i = 1; i <= 4096; i++)
-                        boxFeats.add(fv.getFeatureValue(i));
-                    fvDict.put(fv.comments, boxFeats);
-                }
-                for(Mention m : d.getMentionList()){
-                    Set<BoundingBox> boxSet = d.getBoxSetForMention(m);
-                    for(BoundingBox b : d.getBoundingBoxSet()){
-                        int label = boxSet.contains(b) ? 1 : 0;
-                        String ID = m.getUniqueID() + "|" + b.getUniqueID();
-                        List<Double> feats_affinity = new ArrayList<>();
-                        fvDict.get(b.getUniqueID()).stream().forEachOrdered(v -> feats_affinity.add(v));
-                        _w2vUtil.getVector(m.toString().toLowerCase().trim()).stream().forEachOrdered(v -> feats_affinity.add(v));
-                        ll_affinity.add(ID + "," + label + "," + StringUtil.listToString(feats_affinity, ","));
-                    }
-                }
-                docIdx++;
-                Logger.logStatus("complete (%.2f%%)", 100.0 * (double)docIdx /
-                        docSet.size());
-            }
-        }
-
-        FileIO.writeFile(ll_affinity, Overlord.dataPath +
-                "feats/affinity_feats_" + dataSplit, "feats", false);
-    }
-
-    private static List<String> export_affinityFeats_train(Collection<Document> docSet, Set<String> boxFiles)
-    {
-        List<String> ll_affinity = new ArrayList<>();
-
-        //Store a mapping of [docID -> [mention -> [bounding boxes] ] ]
-        Map<String, Map<Mention, Set<BoundingBox>>>
-                mentionBoxesDict = new HashMap<>();
-        Map<Mention, Document> mentionDocDict = new HashMap<>();
-        for(Document d : docSet){
-            if(boxFiles.contains(d.getID().replace(".jpg", ""))){
-                for(Mention m : d.getMentionList()){
-                    mentionDocDict.put(m, d);
-                    String normText = m.toString().toLowerCase().trim();
-                    if(!mentionBoxesDict.containsKey(normText))
-                        mentionBoxesDict.put(normText, new HashMap<>());
-                    mentionBoxesDict.get(normText).put(m, d.getBoxSetForMention(m));
-                }
-            } else {
-                System.out.println("ERROR: found no box feats for " + d.getID());
-            }
-        }
-
-        //Randomly sample 10 bounding boxes from those that have boxes if
-        //we're subsampling
-        Map<String, Set<BoundingBox>> mentionBoxesDict_pos = new HashMap<>();
-        Map<String, Set<BoundingBox>> mentionBoxesDict_neg = new HashMap<>();
-        for(String normText : mentionBoxesDict.keySet()){
-            List<BoundingBox> boxList_pos = new ArrayList<>();
-            List<BoundingBox> boxList_neg = new ArrayList<>();
-            for(Mention m : mentionBoxesDict.get(normText).keySet()){
-                boxList_pos.addAll(mentionBoxesDict.get(normText).get(m));
-                Document d = mentionDocDict.get(m);
-                Set<BoundingBox> boxSet = new HashSet<>(d.getBoundingBoxSet());
-                boxSet.removeAll(d.getBoxSetForMention(m));
-                boxList_neg.addAll(boxSet);
-            }
-            if(!boxList_pos.isEmpty() && !boxList_neg.isEmpty()){
-                Collections.shuffle(boxList_pos);
-                Collections.shuffle(boxList_neg);
-                mentionBoxesDict_pos.put(normText, new HashSet<>(boxList_pos.subList(0, Math.min(boxList_pos.size()-1, 10))));
-                mentionBoxesDict_neg.put(normText, new HashSet<>(boxList_neg.subList(0, Math.min(boxList_neg.size()-1, 10))));
-            }
-        }
-
-        int txtIdx = 0;
-        for(String normText : mentionBoxesDict_pos.keySet()){
-            List<Double> feats_txt = _w2vUtil.getVector(normText);
-
-            //Since we don't know which image word's box will come from
-            //a-priori, open the doc's file at each box (less efficient, but necessary)
-            for(BoundingBox b : mentionBoxesDict_pos.get(normText)){
-                List<Double> feats_img = null;
-                try {
-                    BufferedReader br = new BufferedReader(new InputStreamReader(
-                            new FileInputStream(Overlord.boxFeatureDir +
-                                    b.getDocID().replace(".jpg", ".feats"))));
-                    String nextLine = br.readLine();
-                    while (nextLine != null && feats_img == null) {
-                        String fvID = nextLine.split(" # ")[1];
-                        if (fvID.equals(b.getUniqueID())) {
-                            FeatureVector fv = FeatureVector.parseFeatureVector(nextLine);
-                            feats_img = new ArrayList<>();
-                            for (int i = 1; i <= 4096; i++)
-                                feats_img.add(fv.getFeatureValue(i));
-                        }
-                        nextLine = br.readLine();
-                    }
-                    br.close();
-                    txtIdx++;
-                    Logger.logStatus("text complete (%.2f%%)", 100.0 * (double)txtIdx /
-                            (mentionBoxesDict_pos.keySet().size() * 2));
-                } catch(Exception ex){Logger.log(ex);}
-
-                if(feats_img == null){
-                    Logger.log("ERROR: found no feats for " + b.getUniqueID());
-                    continue;
-                }
-
-                List<Double> feats_affinity = new ArrayList<>();
-                feats_img.stream().forEachOrdered(v -> feats_affinity.add(v));
-                feats_txt.stream().forEachOrdered(v -> feats_affinity.add(v));
-                String ID = "";
-                ll_affinity.add(ID + ",1," + StringUtil.listToString(feats_affinity, ","));
-            }
-        }
-        for(String normText : mentionBoxesDict_neg.keySet()){
-            List<Double> feats_txt = _w2vUtil.getVector(normText);
-
-            //Since we don't know which image word's box will come from
-            //a-priori, open the doc's file at each box (less efficient, but necessary)
-            for(BoundingBox b : mentionBoxesDict_pos.get(normText)){
-                List<Double> feats_img = null;
-                try {
-                    BufferedReader br = new BufferedReader(new InputStreamReader(
-                            new FileInputStream(Overlord.boxFeatureDir +
-                                    b.getDocID().replace(".jpg", ".feats"))));
-                    String nextLine = br.readLine();
-                    while (nextLine != null && feats_img == null) {
-                        String fvID = nextLine.split(" # ")[1];
-                        if (fvID.equals(b.getUniqueID())) {
-                            FeatureVector fv = FeatureVector.parseFeatureVector(nextLine);
-                            feats_img = new ArrayList<>();
-                            for (int i = 1; i <= 4096; i++)
-                                feats_img.add(fv.getFeatureValue(i));
-                        }
-                        nextLine = br.readLine();
-                    }
-                    br.close();
-                    txtIdx++;
-                    Logger.logStatus("text complete (%.2f%%)", 100.0 * (double)txtIdx /
-                            (mentionBoxesDict_neg.keySet().size() * 2));
-                } catch(Exception ex){Logger.log(ex);}
-
-                if(feats_img == null){
-                    Logger.log("ERROR: found no feats for " + b.getUniqueID());
-                    continue;
-                }
-
-                List<Double> feats_affinity = new ArrayList<>();
-                feats_img.stream().forEachOrdered(v -> feats_affinity.add(v));
-                feats_txt.stream().forEachOrdered(v -> feats_affinity.add(v));
-                String ID = "";
-                ll_affinity.add(ID + ",0," + StringUtil.listToString(feats_affinity, ","));
-            }
-        }
-        return ll_affinity;
-    }
-
-    /**
-     * Exports the joint box/mention embedding used in the affinity model, resulting
-     * in a collection of [4096 + 300] vectors, for the img + txt feats
-     *
-     * @param docSet
-     * @param outroot
-     * @param numThreads
-     */
-    @Deprecated
-    public static void exportFeatures_affinity(Collection<Document> docSet,
-                                               String outroot, int numThreads)
-    {
-        _outroot = outroot;
-        List<Document> docList = new ArrayList<>(docSet);
-        //docList = docList.subList(0, 100);
-
-        Logger.log("Initializing lists"); //stop words courtesy of http://www.ranks.nl/
-        ClassifyUtil.initLists();
-
-        Logger.log("Reading vocabulary from documents");
-        Set<String> vocabulary = new HashSet<>();
-        for (Document d : docList){
-            for (Mention m : d.getMentionList()){
-                for (Token t : m.getTokenList()) {
-                    String text = t.toString().toLowerCase().trim();
-                    if (!_stopWords.contains(text) && StringUtil.hasAlphaNum(text))
-                        vocabulary.add(text);
-                }
-            }
-        }
-        Logger.log("Loading Word2Vec for vocabulary");
-        _w2vUtil = new Word2VecUtil(Overlord.word2vecPath, vocabulary);
-
-        Logger.log("Iterating through documents, separately loading box features for each");
-        ExtractionThread[] threadPool = new ExtractionThread[numThreads];
-        //create and start our first set of threads
-        int docIdx = 0;
-        for(int i=0; i<numThreads; i++) {
-            Document d = docList.get(docIdx);
-            threadPool[i] = new ExtractionThread(d, ExtractionThreadType.AFFINITY);
-            docIdx++;
-        }
-
-        for(int i=0; i<threadPool.length; i++)
-            threadPool[i].start();
-        boolean foundLiveThread = true;
-        while(docIdx < docList.size() || foundLiveThread) {
-            foundLiveThread = false;
-            for(int i=0; i<numThreads; i++) {
-                if(threadPool[i].isAlive()) {
-                    foundLiveThread = true;
-                } else {
-                    //independently, if we found a dead thread and we
-                    //still have image IDs to iterate through, swap this
-                    //dead one out for a live one
-                    if(docIdx < docList.size()) {
-                        Logger.logStatus("Processed %d docs (%.2f%%)",
-                                docIdx, 100.0*(double)docIdx / docList.size());
-                        Document d = docList.get(docIdx);
-                        threadPool[i] = new ExtractionThread(d, ExtractionThreadType.AFFINITY);
-                        docIdx++;
-                        threadPool[i].start();
-                        foundLiveThread = true;
-                    }
-                }
-            }
-
-            //before we check for threadlife again, let's
-            //sleep 50ms so we don't burn
-            try{Thread.sleep(50);}
-            catch(InterruptedException iEx){/*do nothing*/}
-        }
-        Logger.log("Done");
-    }
-
-    private static void exportFeatures(Collection<Document> docSet,
-                                       ExtractionThreadType featureType,
-                                       int numThreads)
-    {
-        Logger.log("Opening [" +_outroot+ "] for writing");
-        BufferedWriter bw = null;
-        try {
-            bw = new BufferedWriter(new FileWriter(_outroot));
-        } catch(IOException ioEx) {
-            System.err.println("Could not save output file " + _outroot);
-            System.exit(0);
-        }
-
-        Logger.log("Computing " + featureType.toString() + " classifier features");
-        List<Document> docList = new ArrayList<>(docSet);
-        ExtractionThread[] threadPool = new ExtractionThread[numThreads];
-
-        //create and start our first set of threads
-        int docIdx = 0;
-        for(int i=0; i<numThreads; i++) {
-            Document d = docList.get(docIdx);
-            threadPool[i] = new ExtractionThread(d, featureType);
-            docIdx++;
-        }
-
-        for(int i=0; i<threadPool.length; i++)
-            threadPool[i].start();
-        boolean foundLiveThread = true;
-        Set<String> addedDocIDs = new HashSet<>();
-        DoubleDict<Integer> labelDistro = new DoubleDict<>();
-        while(docIdx < docList.size() || foundLiveThread) {
-            foundLiveThread = false;
-            for(int i=0; i<numThreads; i++) {
-                if(threadPool[i].isAlive()) {
-                    foundLiveThread = true;
-                } else {
-                    addedDocIDs.add(threadPool[i]._doc.getID());
-                    //if this is a dead thread, store it
-                    try{
-                        for(FeatureVector fv : threadPool[i].fvSet) {
-                            bw.write(fv.toString() + "\n");
-                            labelDistro.increment((int)fv.label);
-                        }
-                        addedDocIDs.add(threadPool[i]._doc.getID());
-                    } catch (IOException ioEx){
-                        Logger.log(ioEx);
-                    }
-
-                    //independently, if we found a dead thread and we
-                    //still have image IDs to iterate through, swap this
-                    //dead one out for a live one
-                    if(docIdx < docList.size()) {
-                        Logger.logStatus("Processed %d images (%.2f%%)",
-                                docIdx, 100.0*(double)docIdx / docList.size());
-                        Document d = docList.get(docIdx);
-                        threadPool[i] = new ExtractionThread(d, featureType);
-                        docIdx++;
-                        threadPool[i].start();
-                        foundLiveThread = true;
-                    }
-                }
-            }
-
-            //before we check for threadlife again, let's
-            //sleep for a half second so we don't burn
-            try{Thread.sleep(500);}
-            catch(InterruptedException iEx){/*do nothing*/}
-        }
-
-        //go through the thread pool one last time to
-        //collect the last of our threads
-        for(int i=0; i<numThreads; i++) {
-            if(!addedDocIDs.contains(threadPool[i]._doc.getID())){
-                try{
-                    for(FeatureVector fv : threadPool[i].fvSet) {
-                        bw.write(fv.toString() + "\n");
-                        labelDistro.increment((int)fv.label);
-                    }
-                    addedDocIDs.add(threadPool[i]._doc.getID());
-                } catch (IOException ioEx){
-                    Logger.log(ioEx);
-                }
-                addedDocIDs.add(threadPool[i]._doc.getID());
-            }
-        }
-
-        Logger.log("Label distro");
-        System.out.println(labelDistro.toString());
-
-        Logger.log("Closing [" + _outroot + "]");
-        try {
-            bw.close();
-        } catch(IOException ioEx) {
-            System.err.println("Could not save output file " + _outroot);
-        }
-    }
-
     /**Returns an alphabetized list of strings in the given filename
      * that occur more than thresh times; originally implemented to
      * help produce one-hot vectors
@@ -1637,6 +1297,62 @@ public abstract class ClassifyUtil {
         return intersection.size() > 0;
     }
 
+    /**Adds the given item to the given feature vector as
+     * a one-hot vector representation, such that the index
+     * idxOffset + idxDict[item] = 1; Also adds the range of
+     * indices represented by the one-hot vector to the metaDict
+     * with the given feature name
+     *
+     * @param item
+     * @param fv
+     * @param idxOffset
+     * @param idxDict
+     * @param featName
+     * @param metaDict
+     * @return The new idxOffset (idxOffset + idxDict.size())
+     */
+    private static int addOneHotVector(String item, FeatureVector fv,
+            int idxOffset, Map<String, Integer> idxDict,
+            String featName, Map<String, Object> metaDict)
+    {
+        //Add this item to the vector (if it's present)
+        int end = idxOffset + idxDict.size() + 1;
+        if(idxDict.containsKey(item))
+            fv.addFeature(idxOffset + idxDict.get(item) + 1, 1.0);
+
+        //Add this onehot to the meta dict
+        addMetaEntry(featName, idxOffset, end, metaDict);
+
+        return end+1;
+    }
+
+    /**Adds a (featName,idx) pair to the given metaDict
+     *
+     * @param featName
+     * @param idx
+     * @param metaDict
+     */
+    private static void addMetaEntry(String featName, int idx,
+                                     Map<String, Object> metaDict)
+    {
+        if(!metaDict.containsKey(featName))
+            metaDict.put(featName, idx);
+    }
+
+    /**Adds a (featName,[start,end]) pair to the given metaDict
+     *
+     * @param featName
+     * @param startIdx
+     * @param endIdx
+     * @param metaDict
+     */
+    private static void addMetaEntry(String featName, int startIdx, int endIdx,
+                                     Map<String, Object> metaDict)
+    {
+        if(!metaDict.containsKey(featName))
+            metaDict.put(featName, new Integer[]{startIdx, endIdx});
+    }
+
     private enum ExtractionThreadType
     {
         AFFINITY, PAIRWISE
@@ -1664,11 +1380,12 @@ public abstract class ClassifyUtil {
             switch(_type){
                 case AFFINITY: run_affinity();
                     break;
-                case PAIRWISE: run_pairwise();
+                case PAIRWISE: run_relation();
                     break;
             }
         }
 
+        @Deprecated
         private void run_affinity()
         {
             //read our box features for this image
@@ -1755,7 +1472,7 @@ public abstract class ClassifyUtil {
             return _metaDict;
         }
 
-        private void run_pairwise()
+        private void run_relation()
         {
             List<Mention> mentionList = _doc.getMentionList();
             for(int i=0; i<mentionList.size(); i++){
@@ -1793,15 +1510,27 @@ public abstract class ClassifyUtil {
             int currentIdx = 1;
             List<Object> featureList = new ArrayList<>();
 
+            //Caption match
+            Integer f_capMatch = m1.getCaptionIdx() == m2.getCaptionIdx() ? 1 : 0;
+            featureList.add(f_capMatch);
+            addMetaEntry("caption_match", currentIdx++, _metaDict);
+
+            //caption match _and_ m_i < m_j / m_j < m_i
+            Integer f_ante_ij = 0;
+            if(m1.getCaptionIdx() == m2.getCaptionIdx() && m1.getIdx() < m2.getIdx())
+                f_ante_ij = 1;
+            featureList.add(f_ante_ij);
+            addMetaEntry("antecedent_ij", currentIdx++, _metaDict);
+
             //Head matches
             String head_1 = m1.getHead().toString().toLowerCase();
             String head_2 = m2.getHead().toString().toLowerCase();
             Integer f_headMatch = head_1.equals(head_2) ? TRUE : FALSE;
             Integer f_headPOSMatch = m1.getHead().getPosTag().equals(m2.getHead().getPosTag()) ? TRUE : FALSE;
             featureList.add(f_headMatch);
-            addMetaEntry("head_match", currentIdx++);
+            addMetaEntry("head_match", currentIdx++, _metaDict);
             featureList.add(f_headPOSMatch);
-            addMetaEntry("head_pos_match", currentIdx++);
+            addMetaEntry("head_pos_match", currentIdx++, _metaDict);
 
             //Lemma match / substring feat
             String lemma_1 = m1.getHead().getLemma().toLowerCase();
@@ -1810,18 +1539,18 @@ public abstract class ClassifyUtil {
             Integer f_substring = lemma_1.contains(lemma_2) ||
                     lemma_2.contains(lemma_1) ? TRUE : FALSE;
             featureList.add(f_lemmaMatch);
-            addMetaEntry("lemma_match", currentIdx++);
+            addMetaEntry("lemma_match", currentIdx++, _metaDict);
             featureList.add(f_substring);
-            addMetaEntry("substring_match", currentIdx++);
+            addMetaEntry("substring_match", currentIdx++, _metaDict);
 
             //Extent match
-            String extent_1 = m1.toString().replace(m1.getHead().toString(), "").toLowerCase();
-            String extent_2 = m2.toString().replace(m2.getHead().toString(), "").toLowerCase();
+            String extent_1 = m1.toString().replace(head_1, "");
+            String extent_2 = m2.toString().replace(head_2, "");
             Integer f_extentMatch = UNK;
             if(!extent_1.isEmpty() || !extent_2.isEmpty())
                 f_extentMatch = extent_1.equalsIgnoreCase(extent_2) ? TRUE : FALSE;
             featureList.add(f_extentMatch);
-            addMetaEntry("extent_match", currentIdx++);
+            addMetaEntry("extent_match", currentIdx++, _metaDict);
 
             //Type match
             String type_1 = m1.getLexicalType();
@@ -1851,11 +1580,11 @@ public abstract class ClassifyUtil {
                 }
             }
             featureList.add(f_lexTypeMatch);
-            addMetaEntry("lex_type_match", currentIdx++);
+            addMetaEntry("lex_type_match", currentIdx++, _metaDict);
             featureList.add(f_lexTypeMatch_other);
-            addMetaEntry("lex_type_match_other", currentIdx++);
+            addMetaEntry("lex_type_match_other", currentIdx++, _metaDict);
             featureList.add(f_lexTypeMatch_only);
-            addMetaEntry("lex_type_match_only", currentIdx++);
+            addMetaEntry("lex_type_match_only", currentIdx++, _metaDict);
 
             //Chunk neighbor features -- left
             Chunk leftNeighbor_1 = _mentionChunkNeighborDict.get(m1)[0];
@@ -1865,9 +1594,9 @@ public abstract class ClassifyUtil {
                 leftChunkType_1 = leftNeighbor_1.getChunkType();
             if(leftNeighbor_2 != null)
                 leftChunkType_2 = leftNeighbor_2.getChunkType();
-            Integer f_leftMatch = getChunkTypeMatch(leftChunkType_1, leftChunkType_2);
+            Integer f_leftMatch = _getChunkTypeMatch(leftChunkType_1, leftChunkType_2);
             featureList.add(f_leftMatch);
-            addMetaEntry("left_chunk_match", currentIdx++);
+            addMetaEntry("left_chunk_match", currentIdx++, _metaDict);
 
             //Chunk neighbor features -- right
             Chunk rightNeighbor_1 = _mentionChunkNeighborDict.get(m1)[1];
@@ -1877,9 +1606,9 @@ public abstract class ClassifyUtil {
                 rightChunkType_1 = rightNeighbor_1.getChunkType();
             if(rightNeighbor_2  != null)
                 rightChunkType_2 = rightNeighbor_2.getChunkType();
-            Integer f_rightMatch = getChunkTypeMatch(rightChunkType_1, rightChunkType_2);
+            Integer f_rightMatch = _getChunkTypeMatch(rightChunkType_1, rightChunkType_2);
             featureList.add(f_rightMatch);
-            addMetaEntry("right_chunk_match", currentIdx++);
+            addMetaEntry("right_chunk_match", currentIdx++, _metaDict);
 
             //Dependency tree features
             DependencyNode root_1 = _doc.getCaption(m1.getCaptionIdx()).getRootNode();
@@ -1893,7 +1622,7 @@ public abstract class ClassifyUtil {
                 f_outDepMatch = outRel.isEmpty() ? FALSE : TRUE;
             }
             featureList.add(f_outDepMatch);
-            addMetaEntry("out_dep_match", currentIdx++);
+            addMetaEntry("out_dep_match", currentIdx++, _metaDict);
 
             //Determiner plural match (assume the first word is
             //the determiner candidate); FALSE is only assigned when
@@ -1910,7 +1639,7 @@ public abstract class ClassifyUtil {
             else if(_detSet_plural.contains(firstWord_1) && _detSet_singular.contains(firstWord_2))
                 f_detPluralMatch = FALSE;
             featureList.add(f_detPluralMatch);
-            addMetaEntry("det_plural_match", currentIdx++);
+            addMetaEntry("det_plural_match", currentIdx++, _metaDict);
 
             //Verb features
             Chunk subjOf_1 = _subjOfDict.get(m1), subjOf_2 = _subjOfDict.get(m2);
@@ -1945,20 +1674,20 @@ public abstract class ClassifyUtil {
                 f_objOfMatch = FALSE;
             featureList.add(f_isSubjMatch);
             featureList.add(f_isObjMatch);
-            addMetaEntry("is_subj_match", currentIdx++);
-            addMetaEntry("is_obj_match", currentIdx++);
+            addMetaEntry("is_subj_match", currentIdx++, _metaDict);
+            addMetaEntry("is_obj_match", currentIdx++, _metaDict);
             featureList.add(f_subjOfMatch);
             featureList.add(f_objOfMatch);
-            addMetaEntry("subj_of_match", currentIdx++);
-            addMetaEntry("obj_of_match", currentIdx++);
+            addMetaEntry("subj_of_match", currentIdx++, _metaDict);
+            addMetaEntry("obj_of_match", currentIdx++, _metaDict);
             featureList.add(f_isSubj_1);
             featureList.add(f_isSubj_2);
-            addMetaEntry("is_subj_1", currentIdx++);
-            addMetaEntry("is_subj_2", currentIdx++);
+            addMetaEntry("is_subj_i", currentIdx++, _metaDict);
+            addMetaEntry("is_subj_j", currentIdx++, _metaDict);
             featureList.add(f_isObj_1);
             featureList.add(f_isObj_2);
-            addMetaEntry("is_obj_1", currentIdx++);
-            addMetaEntry("is_obj_2", currentIdx++);
+            addMetaEntry("is_obj_i", currentIdx++, _metaDict);
+            addMetaEntry("is_obj_j", currentIdx++, _metaDict);
 
             //features for semi-pronouns
             Integer f_semiPronom_1 = m1.getPronounType() == Mention.PRONOUN_TYPE.SEMI ? TRUE : FALSE;
@@ -2052,28 +1781,28 @@ public abstract class ClassifyUtil {
             }
             featureList.add(f_semiPronom_1);
             featureList.add(f_semiPronom_2);
-            addMetaEntry("semi_pronom_1", currentIdx++);
-            addMetaEntry("semi_pronom_2", currentIdx++);
+            addMetaEntry("semi_pronom_i", currentIdx++, _metaDict);
+            addMetaEntry("semi_pronom_j", currentIdx++, _metaDict);
             featureList.add(f_xOfY_1);
             featureList.add(f_xOfY_2);
-            addMetaEntry("x_of_y_1", currentIdx++);
-            addMetaEntry("x_of_y_2", currentIdx++);
+            addMetaEntry("x_of_y_i", currentIdx++, _metaDict);
+            addMetaEntry("x_of_y_j", currentIdx++, _metaDict);
             featureList.add(f_appos_1);
             featureList.add(f_appos_2);
-            addMetaEntry("appositive_1", currentIdx++);
-            addMetaEntry("appositive_2", currentIdx++);
+            addMetaEntry("appositive_i", currentIdx++, _metaDict);
+            addMetaEntry("appositive_j", currentIdx++, _metaDict);
             featureList.add(f_inList_1);
             featureList.add(f_inList_2);
-            addMetaEntry("in_list_1", currentIdx++);
-            addMetaEntry("in_list_2", currentIdx++);
+            addMetaEntry("in_list_i", currentIdx++, _metaDict);
+            addMetaEntry("in_list_j", currentIdx++, _metaDict);
 
             //Meta features
             Integer f_headNotLemma = f_headMatch == TRUE && f_lemmaMatch == FALSE ? TRUE : FALSE;
             Integer f_lemmaNotHead = f_lemmaMatch == TRUE && f_headMatch == FALSE ? TRUE : FALSE;
             featureList.add(f_headNotLemma);
             featureList.add(f_lemmaNotHead);
-            addMetaEntry("head_not_lemma", currentIdx++);
-            addMetaEntry("lemma_not_head", currentIdx++);
+            addMetaEntry("head_not_lemma", currentIdx++, _metaDict);
+            addMetaEntry("lemma_not_head", currentIdx++, _metaDict);
 
             //Add all features to the vector
             FeatureVector fv = new FeatureVector();
@@ -2116,51 +1845,38 @@ public abstract class ClassifyUtil {
 
             //Add one hot vectors, which internally adjust the feature vector but
             //doesn't adjust the idx
-            int start = currentIdx, end = start + _headPairList.size() + 1;
-            addOneHotVector(fv, start, _headPairList, headPair);
-            addMetaEntry("head_pair_onehot", start, end);
-            start = end; end = start + _lemmaPairList.size() + 1;
-            addOneHotVector(fv, start, _lemmaPairList, lemmaPair);
-            addMetaEntry("lemma_pair_onehot", start, end);
-            start = end; end = start + _typePairList.size() + 1;
-            addOneHotVector(fv, start, _typePairList, typePair);
-            addMetaEntry("type_pair_onehot", start, end);
-            start = end; end = start + _leftPairList.size() + 1;
-            addOneHotVector(fv, start, _leftPairList, leftPair);
-            addMetaEntry("left_pair_onehot", start, end);
-            start = end; end = start + _rightPairList.size() + 1;
-            addOneHotVector(fv, start, _rightPairList, rightPair);
-            addMetaEntry("right_pair_onehot", start, end);
-            start = end; end = start + _subjOfList.size() + 1;
-            addOneHotVector(fv, start, _subjOfList, subjOfPair);
-            addMetaEntry("subj_of_onehot", start, end);
-            start = end; end = start + _objOfList.size() + 1;
-            addOneHotVector(fv, start, _objOfList, objOfPair);
-            addMetaEntry("obj_of_onehot", start, end);
-            start = end; end = start + _detList.size() + 1;
-            addOneHotVector(fv, start, _detList, firstWord_1);
-            addMetaEntry("det_1_onehot", start, end);
-            start = end; end = start + _detList.size() + 1;
-            addOneHotVector(fv, start, _detList, firstWord_2);
-            addMetaEntry("det_2_onehot", start, end);
-            start = end; end = start + _numericPairs.size() + 1;
-            addOneHotVector(fv, start, _numericPairs, numericPair);
-            addMetaEntry("numeric_pair_onehot", start, end);
-            start = end; end = start + _modifierPairs.size() + 1;
-            addOneHotVector(fv, start, _modifierPairs, modPair);
-            addMetaEntry("modifier_pair_onehot", start, end);
-            start = end; end = start + _prepositionPairList.size() + 1;
-            addOneHotVector(fv, start, _prepositionPairList, leftPrepPair);
-            addMetaEntry("left_preposition_pair_onehot", start, end);
-            start = end; end = start + _prepositionPairList.size() + 1;
-            addOneHotVector(fv, start, _prepositionPairList, rightPrepPair);
-            addMetaEntry("right_preposition_pair_onehot", start, end);
+            currentIdx = addOneHotVector(headPair, fv, currentIdx,
+                    _headPairs, "head_pair_onehot", _metaDict);
+            currentIdx = addOneHotVector(lemmaPair, fv, currentIdx,
+                    _lemmaPairs, "lemma_pair_onehot", _metaDict);
+            currentIdx = addOneHotVector(typePair, fv, currentIdx,
+                    _typePairs, "lex_type_pair_onehot", _metaDict);
+            currentIdx = addOneHotVector(leftPair, fv, currentIdx,
+                    _leftPairs, "left_pair_onehot", _metaDict);
+            currentIdx = addOneHotVector(rightPair, fv, currentIdx,
+                    _rightPairs, "right_pair_onehot", _metaDict);
+            currentIdx = addOneHotVector(subjOfPair, fv, currentIdx,
+                    _subjOfPairs, "subj_of_onehot", _metaDict);
+            currentIdx = addOneHotVector(objOfPair, fv, currentIdx,
+                    _objOfPairs, "obj_of_onehot", _metaDict);
+            currentIdx = addOneHotVector(firstWord_1, fv, currentIdx,
+                    _dets, "det_1_onehot", _metaDict);
+            currentIdx = addOneHotVector(firstWord_2, fv, currentIdx,
+                    _dets, "det_2_onehot", _metaDict);
+            currentIdx = addOneHotVector(numericPair, fv, currentIdx,
+                    _numericPairs, "numeric_pair_onehot", _metaDict);
+            currentIdx = addOneHotVector(modPair, fv, currentIdx,
+                    _modifierPairs, "modifier_pair_onehot", _metaDict);
+            currentIdx = addOneHotVector(leftPrepPair, fv, currentIdx,
+                    _prepositionPairs, "left_preposition_pair_onehot", _metaDict);
+            currentIdx = addOneHotVector(rightPrepPair, fv, currentIdx,
+                    _prepositionPairs, "right_preposition_pair_onehot", _metaDict);
 
             //We treat hypernyms as -- not a onehot -- but a bag-of-words;
-            //Given 24 core concepts, we keep a vector where entry ij
+            //Given core concepts, we keep a vector where entry ij
             //is 1 if one of the mentions has concept i in its senses hypernyms
             //and the other has concept j
-            start = end; end = start + _hypernyms.size() + 1;
+            int start = currentIdx;
             Set<String> hypSet_1 = _hypDict.get(lemma_1);
             Set<String> hypSet_2 = _hypDict.get(lemma_2);
             for(int i=0; i<_hypernyms.size(); i++){
@@ -2174,14 +1890,14 @@ public abstract class ClassifyUtil {
                     currentIdx++;
                 }
             }
-            addMetaEntry("hypernym_bow", start, end);
+            addMetaEntry("hypernym_bow", start, currentIdx, _metaDict);
 
             //Finally, add a three-way label indicating if these mentions are
             //coreferent, subset, or null\
             Integer label = 0;
             if(!m1.getChainID().equals("0") && !m2.getChainID().equals("0")){
-               String id_ij = Document.getMentionPairStr(m1, m2, true, true);
-               String id_ji = Document.getMentionPairStr(m2, m1, true, true);
+               String id_ij = Document.getMentionPairStr(m1, m2);
+               String id_ji = Document.getMentionPairStr(m2, m1);
                 if(m1.getChainID().equals(m2.getChainID()))
                     label = 1;
                 else if(_subsetMentions.contains(id_ij))
@@ -2192,29 +1908,23 @@ public abstract class ClassifyUtil {
                                //vector from this pair will be 2
             }
 
-            addMetaEntry("max_idx", end+1);
+            addMetaEntry("max_idx", currentIdx+1, _metaDict);
             fv.label = label;
-            fv.comments = Document.getMentionPairStr(m1, m2, true, true);
+            fv.comments = Document.getMentionPairStr(m1, m2);
             return fv;
         }
 
-        private void addOneHotVector(FeatureVector fv, int currentIdx,
-                                    List<String> oneHotList, String item)
-        {
-            if(oneHotList.indexOf(item) > -1)
-                fv.addFeature(currentIdx + oneHotList.indexOf(item) + 1, 1.0);
-        }
-
-        private static void addMetaEntry(String key, int idx)
-        {
-            if(!_metaDict.containsKey(key))
-                _metaDict.put(key, idx);
-        }
-
-        private static void addMetaEntry(String key, int start, int end)
-        {
-            if(!_metaDict.containsKey(key))
-                _metaDict.put(key, new Integer[]{start, end});
+        private static int _getChunkTypeMatch(String chunkType_1, String chunkType_2) {
+            int typeMatch = UNK;
+            if (chunkType_1 == null && chunkType_2 == null)
+                typeMatch = TRUE;
+            else if (chunkType_1 == null)
+                typeMatch = FALSE;
+            else if (chunkType_2 == null)
+                typeMatch = FALSE;
+            else
+                typeMatch = chunkType_1.equals(chunkType_2) ? TRUE : FALSE;
+            return typeMatch;
         }
     }
 }

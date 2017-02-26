@@ -41,7 +41,7 @@ public class BinaryClassifierScoreDict extends DoubleDict<String>
      */
     public void addScore(Mention m1, Mention m2, Double score)
     {
-        set(Document.getMentionPairStr(m1, m2, true), score);
+        set(Document.getMentionPairStr(m1, m2), score);
     }
 
     /**Increments the value of the given key's score
@@ -64,7 +64,7 @@ public class BinaryClassifierScoreDict extends DoubleDict<String>
      */
     public Double get(Mention m1, Mention m2)
     {
-        return dict.get(Document.getMentionPairStr(m1,m2,true));
+        return dict.get(Document.getMentionPairStr(m1,m2));
     }
 
     /**Returns the stored score for the given mention

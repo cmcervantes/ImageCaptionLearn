@@ -195,14 +195,19 @@
         </dependency>
         <dependency>
             <groupId>edu.illinois.cs.cogcomp</groupId>
-            <artifactId>illinois-pos</artifactId>
-            <version>2.0.2</version>
+            <artifactId>illinois-inference</artifactId>
+            <version>3.0.97</version>
         </dependency>
         <dependency>
             <groupId>edu.illinois.cs.cogcomp</groupId>
+            <artifactId>illinois-pos</artifactId>
+            <version>2.0.2</version>
+        </dependency>
+        <!--<dependency>
+            <groupId>edu.illinois.cs.cogcomp</groupId>
             <artifactId>LBJava</artifactId>
             <version>1.2.20</version>
-        </dependency>
+        </dependency>-->
         <!--<dependency>
             <groupId>edu.illinois.cs.cogcomp</groupId>
             <artifactId>illinois-cogcomp-nlp</artifactId>

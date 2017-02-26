@@ -117,7 +117,7 @@ public class Score
 	 */
 	public String toScoreString()
 	{
-		return String.format("P: %6.2f%% | R: %6.2f%% | F1: %6.2f%% ",
+		return String.format("P: %6.2f%% | R: %6.2f%% | F1: %6.2f%%",
 							 _precision *100, _recall *100, _f1 *100);
 	}
 

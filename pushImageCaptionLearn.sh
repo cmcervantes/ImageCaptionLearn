@@ -9,16 +9,19 @@ scp -r ~/source/ImageCaptionLearn/src/ clgrad3:~/source/ImageCaptionLearn/stagin
 scp ~/source/ImageCaptionLearn/pom.xml clgrad3:~/source/ImageCaptionLearn/staging_0/ >/dev/null
 scp ~/source/ImageCaptionLearn/build.sh clgrad3:~/source/ImageCaptionLearn/staging_0/ >/dev/null
 scp ~/source/ImageCaptionLearn/README clgrad3:~/source/ImageCaptionLearn/staging_0/ >/dev/null
+scp ~/source/ImageCaptionLearn/resetOut.sh clgrad3:~/source/ImageCaptionLearn/staging_0/ >/dev/null
 
 scp -r ~/source/ImageCaptionLearn/src/ clgrad3:~/source/ImageCaptionLearn/staging_1/ >/dev/null
 scp ~/source/ImageCaptionLearn/pom.xml clgrad3:~/source/ImageCaptionLearn/staging_1/ >/dev/null
 scp ~/source/ImageCaptionLearn/build.sh clgrad3:~/source/ImageCaptionLearn/staging_1/ >/dev/null
 scp ~/source/ImageCaptionLearn/README clgrad3:~/source/ImageCaptionLearn/staging_1/ >/dev/null
+scp ~/source/ImageCaptionLearn/resetOut.sh clgrad3:~/source/ImageCaptionLearn/staging_1/ >/dev/null
 
 scp -r ~/source/ImageCaptionLearn/src/ clgrad3:~/source/ImageCaptionLearn/staging_2/ >/dev/null
 scp ~/source/ImageCaptionLearn/pom.xml clgrad3:~/source/ImageCaptionLearn/staging_2/ >/dev/null
 scp ~/source/ImageCaptionLearn/build.sh clgrad3:~/source/ImageCaptionLearn/staging_2/ >/dev/null
 scp ~/source/ImageCaptionLearn/README clgrad3:~/source/ImageCaptionLearn/staging_2/ >/dev/null
+scp ~/source/ImageCaptionLearn/resetOut.sh clgrad3:~/source/ImageCaptionLearn/staging_2/ >/dev/null
 
 
 
