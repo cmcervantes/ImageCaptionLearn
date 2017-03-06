@@ -234,6 +234,12 @@ public class ILPSolverThread extends Thread {
                 run_grounding();
                 break;
             case JOINT:
+                run_relation();
+                _fixedLinks = new HashMap<>(_relationGraph);
+                _relationGraph = new HashMap<>();
+                //run_grounding();
+                //_fixedLinks = new HashMap<>(_groundingGraph);
+                //_groundingGraph = new HashMap<>();
                 run_combined();
                 break;
         }

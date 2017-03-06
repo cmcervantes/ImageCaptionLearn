@@ -12,10 +12,7 @@ import net.sourceforge.argparse4j.internal.UnrecognizedArgumentException;
 import org.apache.commons.lang.ArrayUtils;
 import out.OutTable;
 import statistical.ScoreDict;
-import structures.BoundingBox;
-import structures.Chain;
-import structures.Document;
-import structures.Mention;
+import structures.*;
 import utilities.*;
 
 import java.io.BufferedReader;
@@ -224,7 +221,7 @@ public class Overlord
                 "(0-10,11+) cardinality prediction", String.class,
                 "/home/ccervan2/source/data/feats/flickr30kEntities_v2_box_card_dev.scores",
                 "FILE", false);
-        _setArgument_opts(infParser.addArgument("--inf_type"), new String[]{"relation", "grounding", "combined"},
+        _setArgument_opts(infParser.addArgument("--inf_type"), new String[]{"relation", "grounding", "joint"},
                 "relation", "Specified which inference module to use");
         _setArgument_flag(infParser.addArgument("--type_constraint"), "Enables the inference type constraint");
         _setArgument_flag(infParser.addArgument("--export_files"), "Writes examples to out/coref/htm/ and conll "+
@@ -282,6 +279,161 @@ public class Overlord
             } else if(ns.getBoolean("mod_subset")){
                 Minion.export_modSubsetFeats(docSet, dataSplit);
             } else {
+                List<Double> boxCounts = new ArrayList<>();
+                for(Document d : docSet){
+                    for(BoundingBox b : d.getBoundingBoxSet()){
+                        int numChains = 0;
+                        for(Chain c : d.getChainSet())
+                            if(c.getBoundingBoxSet().contains(b))
+                                numChains++;
+                        boxCounts.add((double)numChains);
+                    }
+                }
+                System.out.println(StatisticalUtil.getMean(boxCounts));
+                System.exit(0);
+
+                /*
+                List<Chain> noboxChains = new ArrayList<>();
+                List<Mention> nonvisMentions = new ArrayList<>();
+                for(Document d : docSet){
+                    for(Chain c : d.getChainSet())
+                        if(c.getBoundingBoxSet().isEmpty() && !c.getID().equals("0"))
+                            noboxChains.add(c);
+                    for(Mention m : d.getMentionList())
+                        if(m.getChainID().equals("0"))
+                            nonvisMentions.add(m);
+                }
+                OutTable ot_noboxchains = new OutTable("img_id", "chain_id", "mentions", "size");
+                Collections.shuffle(noboxChains);
+                for(int i=0; i<Math.min(500, noboxChains.size()); i++){
+                    Chain c = noboxChains.get(i);
+                    String mentionStr = StringUtil.listToString(c.getMentionSet(), "|");
+                    ot_noboxchains.addRow(c.getDocID(), c.getID(), mentionStr, c.getMentionSet().size());
+                }
+                ot_noboxchains.writeToCsv("ex_noboxChains", true);
+
+                OutTable ot_nonvisMentions = new OutTable("img_id", "cap_idx", "m_idx", "mention", "caption");
+                Map<String, String> capDict = new HashMap<>();
+                for(Document d : docSet)
+                    for(Caption c : d.getCaptionList())
+                        capDict.put(d.getID() + "#" + c.getIdx(), c.toString());
+                Collections.shuffle(nonvisMentions);
+                for(int i=0; i<Math.min(500, nonvisMentions.size()); i++){
+                    Mention m = nonvisMentions.get(i);
+                    ot_nonvisMentions.addRow(m.getDocID(), m.getCaptionIdx(), m.getIdx(),
+                            m.toString(), capDict.get(m.getDocID() + "#" + m.getCaptionIdx()));
+                }
+                ot_nonvisMentions.writeToCsv("ex_nonvis", true);
+**/
+                /*
+
+                double chains_nobox = 0.0, sing_nobox = 0.0;
+                List<Double> boxCounts = new ArrayList<>();
+                List<Double> mentionCounts_cap = new ArrayList<>();
+                List<Double> chainCounts = new ArrayList<>();
+                List<Double> mentionCounts_chain = new ArrayList<>();
+                List<Double> nonvisCount = new ArrayList<>();
+                List<Double> anaphoric_pro = new ArrayList<>();
+                List<Double> deictic_pro = new ArrayList<>();
+                double singletonChains = 0.0, singletonBoxChains = 0.0;
+                List<Double> boxesPerChain = new ArrayList<>();
+                for(Document d : docSet){
+                    double chainCount = 0;
+                    for(Chain c : d.getChainSet()){
+                        if(!c.getID().equals("0")){
+                            if(c.getBoundingBoxSet().isEmpty()) {
+                                chains_nobox++;
+                                if(c.getMentionSet().size() == 1)
+                                    sing_nobox++;
+                            } else if(c.getMentionSet().size() == 1){
+                                singletonBoxChains++;
+                            }
+                            chainCount++;
+
+                            if(c.getMentionSet().size() == 1)
+                                singletonChains++;
+
+                            boxesPerChain.add((double)c.getBoundingBoxSet().size());
+                        }
+                        mentionCounts_chain.add((double)c.getMentionSet().size());
+                    }
+                    chainCounts.add(chainCount);
+                    boxCounts.add((double)d.getBoundingBoxSet().size());
+                    for(Caption c : d.getCaptionList())
+                        mentionCounts_cap.add((double)c.getMentionList().size());
+                    int numNonvis = 0;
+                    for(Mention m : d.getMentionList())
+                        if(m.getChainID().equals("0"))
+                            numNonvis++;
+                    nonvisCount.add((double)numNonvis / (double)d.getMentionList().size());
+                    int numAna = 0, numDeic = 0;
+                    for(Mention m : d.getMentionList()){
+                        if(m.getPronounType() != Mention.PRONOUN_TYPE.NONE){
+                            if(m.getPronounType() == Mention.PRONOUN_TYPE.SEMI)
+                                numDeic++;
+                            else
+                                numAna++;
+                        }
+                    }
+                    anaphoric_pro.add((double)numAna);
+                    deictic_pro.add((double)numDeic);
+                }
+
+
+
+                double numMentions = StatisticalUtil.getSum(mentionCounts_cap);
+                System.out.printf("%s: %.4f\n", "boxes per image", StatisticalUtil.getMean(boxCounts));
+                System.out.printf("%s: %.4f\n", "mentions per caption", StatisticalUtil.getMean(mentionCounts_cap));
+                System.out.printf("%s: %.4f\n", "mentions per image", numMentions / docSet.size());
+                System.out.printf("%s: %.4f\n", "chains per image", StatisticalUtil.getMean(chainCounts));
+                System.out.printf("%s: %.4f\n", "mentions per chain", StatisticalUtil.getMean(mentionCounts_chain));
+                System.out.printf("%s: %.4f\n", "nonvis", StatisticalUtil.getMean(nonvisCount));
+                System.out.printf("%s: %.4f\n", "anaphoric", StatisticalUtil.getSum(anaphoric_pro) / numMentions);
+                System.out.printf("%s: %.4f\n", "deictic", StatisticalUtil.getSum(deictic_pro) / numMentions);
+                System.out.printf("%s: %.4f\n", "singleton chains", singletonChains);
+                System.out.printf("%s: %.4f\n", "sing_nobox chains", sing_nobox);
+                System.out.printf("%s: %.4f\n", "sing_box chains", singletonBoxChains);
+                System.out.printf("%s: %.4f\n", "total_nobox chains", chains_nobox);
+                System.out.printf("%s: %.4f\n", "total chains", StatisticalUtil.getSum(chainCounts));
+                System.out.printf("%s: %.4f\n", "boxes per chain", StatisticalUtil.getMean(boxesPerChain));
+
+                System.exit(0);
+
+
+                DoubleDict<Document> subsetEx = new DoubleDict<>();
+                for(Document d : docSet){
+                    int numNonvis = 0;
+                    for(Mention m : d.getMentionList())
+                        if(m.getChainID().equals("0"))
+                            numNonvis++;
+                    double subsetChains = Math.log(d.getSubsetChains().size()) -
+                            Math.log(d.getChainSet().size());
+                    double nonvisCounts = Math.log(numNonvis) - Math.log(d.getMentionList().size());
+                    subsetEx.increment(d, subsetChains + nonvisCounts - Math.log(d.getBoundingBoxSet().size()));
+                    //subsetEx.increment(d, (double)d.getSubsetChains().size() / (double)d.getChainSet().size() *
+                    //        (double)numNonvis / (double)d.getMentionList().size());
+
+                    boolean foundCrowd = false, foundBand = false, foundNonvis = false;
+                    for(Mention m : d.getMentionList()){
+                        if(m.getChainID().equals("0"))
+                            foundNonvis = true;
+                        if(m.toString().contains("band"))
+                            foundBand = true;
+                        if(m.toString().contains("crowd"))
+                            foundCrowd = true;
+                    }
+                }
+                int biff = 0;
+                for(Document d : subsetEx.getSortedByValKeys(true)){
+                    System.out.println(d.getID());
+                    for(Chain[] pair : d.getSubsetChains())
+                        System.out.println(pair[0].getID() + "|"  + pair[1].getID());
+                    biff++;
+                    if(biff > 20)
+                        System.exit(0);
+                }
+*/
+
 
                 BinaryClassifierScoreDict nonvisScores =
                         new BinaryClassifierScoreDict("/home/ccervan2/source/data/feats/nonvis_test_20170215.scores");
@@ -700,7 +852,7 @@ public class Overlord
                         null, null, affinityFile, cardinalityFile,
                         ns.getString("graph_root"), ns.getDouble("alpha"));
                     break;
-                case "combined": relInf = new RelationInference(docSet, nonvisFile,
+                case "joint": relInf = new RelationInference(docSet, nonvisFile,
                         relationFile, typeCostFile, affinityFile, cardinalityFile,
                         ns.getString("graph_root"), ns.getDouble("alpha"));
                     break;
