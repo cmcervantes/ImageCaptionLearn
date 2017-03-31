@@ -8,9 +8,11 @@ import structures.BoundingBox;
 import structures.Document;
 import structures.Mention;
 import utilities.Logger;
-import utilities.StatisticalUtil;
 
-import java.util.*;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 
 /**Implementation of the ILP solver used for multithreaded coreference
@@ -22,17 +24,14 @@ public class ILPSolverThread extends Thread {
     private edu.illinois.cs.cogcomp.lbjava.infer.ILPSolver _solver;
     private List<Mention> _mentionList;
     private List<BoundingBox> _boxList;
-    private RelationInference.InferenceType _type;
+    private ILPInference.InferenceType _type;
     private Map<String, Integer> _fixedLinks;
     private String _docID;
-    private Map<String, double[]> _relScores, _cardScores, _typeCosts;
+    private Map<String, double[]> _relScores, _cardScores;
     private Map<String, Double> _affScores;
     private Map<String, Integer> _relationGraph;
     private Map<String, Integer> _groundingGraph;
-    private boolean _constrainTypes;
-    private Map<Mention, String> _pronomTypeDict;
     private boolean _foundSolution;
-    private double _alpha;
     private int _solverThreads;
     private boolean _fallbackSolution;
 
@@ -46,11 +45,11 @@ public class ILPSolverThread extends Thread {
      */
     public ILPSolverThread(List<Mention> mentionList, Map<String, double[]> relationScores,
                            Map<String, double[]> typeCosts, Map<String, Integer> fixedLinks,
-                           boolean constrainTypes, int solverThreads, double alpha)
+                           boolean constrainTypes, int solverThreads)
     {
-        _init(RelationInference.InferenceType.RELATION, mentionList, null,
+        _init(ILPInference.InferenceType.RELATION, mentionList, null,
               relationScores, typeCosts, null, null, fixedLinks,
-              constrainTypes, solverThreads, alpha);
+              constrainTypes, solverThreads);
     }
 
     /**
@@ -65,9 +64,8 @@ public class ILPSolverThread extends Thread {
                            Map<String, double[]> affinityScores, Map<String, double[]> cardinalityScores,
                            int solverThreads)
     {
-        _init(RelationInference.InferenceType.GROUNDING, mentionList, boxList, null,
-              null, affinityScores, cardinalityScores, null, false, solverThreads,
-              0.0);
+        _init(ILPInference.InferenceType.GROUNDING, mentionList, boxList, null,
+              null, affinityScores, cardinalityScores, null, false, solverThreads);
     }
 
     /**
@@ -84,12 +82,11 @@ public class ILPSolverThread extends Thread {
     public ILPSolverThread(List<Mention> mentionList, List<BoundingBox> boxList,
                            Map<String, double[]> relationScores, Map<String, double[]> typeCosts,
                            Map<String, double[]> affinityScores, Map<String, double[]> cardinalityScores,
-                           Map<String, Integer> fixedLinks, boolean constrainTypes, int solverThreads,
-                           double alpha)
+                           Map<String, Integer> fixedLinks, boolean constrainTypes, int solverThreads)
     {
-        _init(RelationInference.InferenceType.JOINT, mentionList, boxList, relationScores,
+        _init(ILPInference.InferenceType.JOINT, mentionList, boxList, relationScores,
                 typeCosts, affinityScores, cardinalityScores, fixedLinks, constrainTypes,
-                solverThreads, alpha);
+                solverThreads);
     }
 
     /**
@@ -103,17 +100,16 @@ public class ILPSolverThread extends Thread {
      * @param fixedLinks
      * @param constrainTypes
      */
-    private void _init(RelationInference.InferenceType infType, List<Mention> mentionList,
+    private void _init(ILPInference.InferenceType infType, List<Mention> mentionList,
                        List<BoundingBox> boxList, Map<String, double[]> relationScores,
                        Map<String, double[]> typeCosts, Map<String, double[]> affinityScores,
                        Map<String, double[]> cardinalityScores, Map<String, Integer> fixedLinks,
-                       boolean constrainTypes, int solverThreads, double alpha)
+                       boolean constrainTypes, int solverThreads)
     {
         _mentionList = mentionList; _boxList = boxList;
-        _type = infType; _alpha = alpha;
+        _type = infType;
         _docID = _mentionList.get(0).getDocID();
         _fixedLinks = new HashMap<>();
-        _pronomTypeDict = new HashMap<>();
         if (fixedLinks != null) {
             _fixedLinks = new HashMap<>(fixedLinks);
 
@@ -127,25 +123,21 @@ public class ILPSolverThread extends Thread {
                     String pairStr_ji = Document.getMentionPairStr(m_j, m_i);
                     Integer label_ij = _fixedLinks.get(pairStr_ij);
                     Integer label_ji = _fixedLinks.get(pairStr_ji);
+                    /*
                     if(label_ij != null && label_ij == 1 || label_ji != null && label_ji == 1){
                         //We know that predicted coref pairs come as a pronoun and non-pronom
                         if(m_i.getPronounType() != Mention.PRONOUN_TYPE.NONE)
                             _pronomTypeDict.put(m_i, ClassifyUtil.getTypeCostLabel(m_j));
                         else if(m_j.getPronounType() != Mention.PRONOUN_TYPE.NONE)
                             _pronomTypeDict.put(m_j, ClassifyUtil.getTypeCostLabel(m_i));
-                    }
+                    }*/
                 }
             }
         }
 
-        //If we're constraining types, fix all heterogeneously
-        //typed mention links as null
-        _constrainTypes = constrainTypes;
-
         //store our scores
         _relScores = relationScores;
         _cardScores = cardinalityScores;
-        _typeCosts = typeCosts;
         _affScores = new HashMap<>();
         if (affinityScores != null)
             affinityScores.forEach((k, v) -> _affScores.put(k, affinityScores.get(k)[1]));
@@ -182,42 +174,17 @@ public class ILPSolverThread extends Thread {
         return _docID;
     }
 
-    public boolean foundSolution(){return _foundSolution;}
-
-    public boolean isFallbackSolution(){return _fallbackSolution;}
-
-    /**Returns an array of type costs per label, where type costs
-     * are averaged in cases where a mention has multiple types
+    /**Whether ILP inference found a solution
      *
-     * @param m_i
-     * @param m_j
      * @return
      */
-    private double[] getTypeCosts(Mention m_i, Mention m_j)
-    {
-        //For each label, for each of the lexical types in the mention pair,
-        //get the average type cost
-        String[] types_i;
-        if(_pronomTypeDict.containsKey(m_i))
-            types_i = _pronomTypeDict.get(m_i).split("/");
-        else
-            types_i = ClassifyUtil.getTypeCostLabel(m_i).split("/");
-        String[] types_j;
-        if(_pronomTypeDict.containsKey(m_j))
-            types_j = _pronomTypeDict.get(m_j).split("/");
-        else
-            types_j = ClassifyUtil.getTypeCostLabel(m_j).split("/");
+    public boolean foundSolution(){return _foundSolution;}
 
-        double[] costs = new double[4];
-        for(int y=0; y<4; y++){
-            List<Double> costList = new ArrayList<>();
-            for(String t_i : types_i)
-                for (String t_j : types_j)
-                    costList.add(_typeCosts.get(t_i + "|" + t_j)[y]);
-            costs[y] = StatisticalUtil.getMean(costList);
-        }
-        return costs;
-    }
+    /**Whether ILP inference had to fall back to a solution
+     *
+     * @return
+     */
+    public boolean isFallbackSolution(){return _fallbackSolution;}
 
     /* Run Methods */
 
@@ -245,7 +212,7 @@ public class ILPSolverThread extends Thread {
         }
 
         //If we failed to find a joint solution, find individual solutions
-        if(_type == RelationInference.InferenceType.JOINT && !_foundSolution){
+        if(_type == ILPInference.InferenceType.JOINT && !_foundSolution){
             _fallbackSolution = true;
             _relationGraph = new HashMap<>(); _groundingGraph = new HashMap<>();
             _resetSolver();
@@ -270,15 +237,9 @@ public class ILPSolverThread extends Thread {
                 //Add boolean variables for each label, each direction
                 String id_ij = Document.getMentionPairStr(m_i, m_j);
                 String id_ji = Document.getMentionPairStr(m_j, m_i);
-                double[] typeCosts_ij = {0.0, 0.0, 0.0, 0.0};
-                double[] typeCosts_ji = {0.0, 0.0, 0.0, 0.0};
-                if(_constrainTypes){
-                    typeCosts_ij = getTypeCosts(m_i, m_j);
-                    typeCosts_ji = getTypeCosts(m_j, m_i);
-                }
                 for (int y = 0; y < 4; y++) {
-                    relationIndices[i][j][y] = _addRelationVariable(id_ij, y, typeCosts_ij[y], 1.0);
-                    relationIndices[j][i][y] = _addRelationVariable(id_ji, y, typeCosts_ji[y], 1.0);
+                    relationIndices[i][j][y] = _addRelationVariable(id_ij, y, 1.0);
+                    relationIndices[j][i][y] = _addRelationVariable(id_ji, y, 1.0);
                 }
 
                 //Add pairwise relation constraints
@@ -343,14 +304,11 @@ public class ILPSolverThread extends Thread {
                 //Add boolean variables for each label, each direction
                 String id_ij = Document.getMentionPairStr(m_i, m_j);
                 String id_ji = Document.getMentionPairStr(m_j, m_i);
-                double[] typeCosts = {0.0, 0.0, 0.0, 0.0};
-                if(_constrainTypes)
-                    typeCosts = getTypeCosts(m_i, m_j);
                 for (int y = 0; y < 4; y++) {
                     relationIndices[i][j][y] = _addRelationVariable(id_ij, y,
-                            typeCosts[y], 2.0 / _mentionList.size());
+                            2.0 / _mentionList.size());
                     relationIndices[j][i][y] = _addRelationVariable(id_ji, y,
-                            typeCosts[y],  2.0 / _mentionList.size());
+                            2.0 / _mentionList.size());
                 }
 
                 //Add pairwise relation constraints
@@ -389,6 +347,11 @@ public class ILPSolverThread extends Thread {
         solveGraph(relationIndices, groundingIndices);
     }
 
+    /**Calls the solver to solve the ILP graph and stores the graph(s)
+     *
+     * @param relationIndices
+     * @param groundingIndices
+     */
     private void solveGraph(int[][][] relationIndices, int[][] groundingIndices)
     {
         try {
@@ -416,15 +379,14 @@ public class ILPSolverThread extends Thread {
      *
      * @param pairID    - Mention pair ID of the end points to this variable's link
      * @param label     - [0,3] label of the link this variable represents
-     * @param typeCost  - cost of having a link of this label between mentions of these types
      * @param coeff     - coefficient of this score (typically 1.0 or 2/|M|)
      * @return
      */
-    private int _addRelationVariable(String pairID, int label, double typeCost, double coeff)
+    private int _addRelationVariable(String pairID, int label, double coeff)
     {
         double score = 0.0;
         if (_relScores.containsKey(pairID))
-            score = Math.max(0, coeff * (_relScores.get(pairID)[label] + _alpha * typeCost));
+            score = Math.max(0, coeff * _relScores.get(pairID)[label]);
         return _solver.addBooleanVariable(score);
     }
 

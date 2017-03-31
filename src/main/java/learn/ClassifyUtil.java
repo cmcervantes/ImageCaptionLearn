@@ -27,9 +27,6 @@ public abstract class ClassifyUtil {
     protected static Map<Mention, Chunk> _subjOfDict;
     protected static Map<Mention, Chunk> _objOfDict;
     protected static Word2VecUtil _w2vUtil;
-    protected static Map<Mention, Chain> _mentionChainDict;
-    protected static Set<String> _mentionPairsWithSubsetBoxes;
-    private static Map<String, String> _clothAttrLex;
     protected static Map<Mention, String> _prepDict_left;
     protected static Map<Mention, String> _prepDict_right;
 
@@ -92,6 +89,10 @@ public abstract class ClassifyUtil {
         return idxDict;
     }
 
+    /**Feature preprocessing loads onehot dictionaries and lists from files
+     *
+     * @param docSet
+     */
     private static void _featurePreprocessing(Collection<Document> docSet)
     {
         Logger.log("Feature preprocessing (onehot index dictionaries)");
@@ -260,6 +261,13 @@ public abstract class ClassifyUtil {
         }
     }
 
+    /**Exports relation features to [outroot].feats, using the given docSet, and
+     * number of threads
+     *
+     * @param docSet
+     * @param outroot
+     * @param numThreads
+     */
     public static void exportFeatures_relation(Collection<Document> docSet, String outroot, int numThreads)
     {
         //Feature preprocessing
@@ -359,11 +367,21 @@ public abstract class ClassifyUtil {
         JsonIO.writeFile(ExtractionThread.getMetaDict(), outroot + "_meta", false);
     }
 
+    /**Exports nonvisual features to [outroot].feats, using the given docSet
+     *
+     * @param docSet
+     * @param outroot
+     */
     public static void exportFeatures_nonvis(Collection<Document> docSet, String outroot)
     {
         _exportFeatures_singleMention(docSet, outroot, "nonvis");
     }
 
+    /**Exports box cardinality features to [outroot].feats, using the given docSet
+     *
+     * @param docSet
+     * @param outroot
+     */
     public static void exportFeatures_boxCard(Collection<Document> docSet, String outroot)
     {
         _exportFeatures_singleMention(docSet, outroot, "boxCard");
@@ -488,28 +506,6 @@ public abstract class ClassifyUtil {
         return mccScores;
     }
 
-    public static String getTypeCostLabel(Mention m)
-    {
-        switch(m.getPronounType()){
-            case SUBJECTIVE_SINGULAR:
-            case SUBJECTIVE_PLURAL:
-            case OBJECTIVE_SINGULAR:
-            case OBJECTIVE_PLURAL:
-            case REFLEXIVE_SINGULAR:
-            case REFLEXIVE_PLURAL:
-            case RECIPROCAL:
-                return "animate";
-            case SEMI:
-                return "semi";
-            case DEMONSTRATIVE:
-            case INDEFINITE:
-            case OTHER:
-            case RELATIVE:
-                return "other_pro";
-        }
-        return m.getLexicalType();
-    }
-
     /**Exports the box-mention affinity features into a single file;
      * all vectors are returned for dev/text, but -- for train --
      * a random sampling of 10 mention-box pairs are given, per mention text
@@ -586,6 +582,13 @@ public abstract class ClassifyUtil {
                 "feats/affinity_feats_" + dataSplit, "feats", false);
     }
 
+    /**Exports affiity features for train, where 10 random boxes are sampled per
+     * unique mention string
+     *
+     * @param docSet
+     * @param boxFiles
+     * @return
+     */
     private static List<String> _exportFeatures_affinity_train(Collection<Document> docSet, Set<String> boxFiles)
     {
         List<String> ll_affinity = new ArrayList<>();
@@ -941,32 +944,40 @@ public abstract class ClassifyUtil {
         return corefPairs;
     }
 
-    /**
-     * Performs attribute attachment, associating animate mentions (as keys) with
+    /**Performs attribute attachment, associating animate mentions (as keys) with
      * attributes in the form of Annotation objects (Mentions, Chunks, or Tokens)
      *
      * @param docSet
      * @return
      */
-    public static Map<Mention, AttrStruct> attributeAttachment_agent(Collection<Document> docSet) {
+    public static Map<Mention, AttrStruct> attributeAttachment_agent(Collection<Document> docSet)
+    {
+        _featurePreprocessing(docSet);
         Map<Mention, AttrStruct> attributeDict = new HashMap<>();
 
-        String[][] clothAttrLex = FileIO.readFile_table(Overlord.resourcesDir + "clothAttrLex.csv");
-        _clothAttrLex = new HashMap<>();
-        for (String[] row : clothAttrLex)
-            _clothAttrLex.put(row[0], row[1]);
+        Logger.log("Loading frequent heads / attribute locations from files");
+        String[][] clothAttrTable = FileIO.readFile_table(Overlord.resourcesDir + "hist_clothHead.csv");
+        Map<String, String> clothAttrs = new HashMap<>();
+        for (String[] row : clothAttrTable)
+            if(row.length > 2)
+                clothAttrs.put(row[0], row[1]);
+        String[][] bodypartAttrTable = FileIO.readFile_table(Overlord.resourcesDir + "hist_bodypartHead.csv");
+        Map<String, String> bodypartAttrs = new HashMap<>();
+        for(String[] row : bodypartAttrTable)
+            if(row.length > 2)
+                bodypartAttrs.put(row[0], row[1]);
 
         Logger.log("Storing mention genders");
         Map<Mention, String> genderDict = new HashMap<>();
-        /*
         for (Document d : docSet) {
             for (Mention m : d.getMentionList()) {
-                List<String> hyps = getHypernyms(m.getHead().getLemma());
+                Set<String> hyps = _hypDict.get(m.getHead().getLemma());
                 String gender = m.getGender(hyps);
+                //String gender = m.getGender();
                 if (!gender.equals("neuter"))
                     genderDict.put(m, gender);
             }
-        }*/
+        }
 
         Logger.log("Associating bodyparts with agent mentions");
         for (Document d : docSet) {
@@ -974,16 +985,10 @@ public abstract class ClassifyUtil {
                 List<Mention> bodypartList = new ArrayList<>();
                 List<Mention> agentList = new ArrayList<>();
                 for (Mention m : c.getMentionList()) {
-                    String normText = " " + m.toString().toLowerCase().trim();
                     if (m.getLexicalType().equals("people") ||
-                            m.getLexicalType().equals("animals")) {
+                        m.getLexicalType().equals("animals")) {
                         agentList.add(m);
                     } else if (m.getPronounType().isAnimate()) {
-                        agentList.add(m);
-                    } else if (normText.endsWith(" one") ||
-                            normText.endsWith(" other") ||
-                            normText.endsWith(" another") ||
-                            normText.endsWith(" others")) {
                         agentList.add(m);
                     } else if (m.getLexicalType().equals("bodyparts")) {
                         bodypartList.add(m);
@@ -1005,8 +1010,8 @@ public abstract class ClassifyUtil {
                         //if its a singleton cluster, check the gender as well
                         List<Mention> nearestAgentCluster_left = null;
                         List<Mention> nearestAgentCluster_right = null;
-                        int maxIdx = -1;
-                        int minIdx = -1;
+                        int maxIdx = Integer.MIN_VALUE;
+                        int minIdx = Integer.MAX_VALUE;
                         for (List<Mention> agentCluster : clusterList_agent) {
                             //for the purposes of determining the nearest
                             //mention, get the last in the cluster
@@ -1034,7 +1039,7 @@ public abstract class ClassifyUtil {
 
                         List<Mention> agentCluster = null;
                         //1) Associate the nearest following agent cluster if
-                        //   in an parts of people construction (ie "the arm of a man")
+                        //   X in an XofY construction (ie "the arm of a man")
                         String interstitialString_right = "";
                         if (nearestAgentCluster_right != null) {
                             Mention m_pers = nearestAgentCluster_right.get(0);
@@ -1055,30 +1060,22 @@ public abstract class ClassifyUtil {
                                 if (!attributeDict.containsKey(agent))
                                     attributeDict.put(agent, toAttrStruct(agent));
 
-                                String normText = m_parts.toString().toLowerCase();
-                                String attrName = "bodypart";
-                                if (normText.contains("head") || normText.contains("hair") || normText.contains("mouth") || normText.contains("face")) {
-                                    attrName = "head";
-                                } else if (normText.contains("chest")) {
-                                    attrName = "torso";
-                                } else if (normText.contains("arm")) {
-                                    attrName = "arms";
-                                } else if (normText.contains("leg")) {
-                                    attrName = "legs";
-                                } else if (normText.contains("hand")) {
-                                    attrName = "hands";
-                                } else if (normText.contains("foot") || normText.contains("feet")) {
-                                    attrName = "feet";
-                                }
+                                String partsHead = m_parts.getHead().getLemma().toLowerCase();
+                                String partsNormText = m_parts.toString().toLowerCase();
 
-                                if (normText.contains("her ")) {
+                                String attrClass = "bodypart";
+                                if(bodypartAttrs.containsKey(partsHead))
+                                    if(!bodypartAttrs.get(partsHead).equals("none"))
+                                        attrClass = bodypartAttrs.get(partsHead);
+
+                                if (partsNormText.contains("her ")) {
                                     attributeDict.get(agent).clearAttribute("gender");
                                     attributeDict.get(agent).addAttribute("gender", "female");
-                                } else if (normText.contains("his ")) {
+                                } else if (partsNormText.contains("his ")) {
                                     attributeDict.get(agent).clearAttribute("gender");
                                     attributeDict.get(agent).addAttribute("gender", "male");
                                 }
-                                attributeDict.get(agent).addAttribute(attrName, toAttrStruct(m_parts));
+                                attributeDict.get(agent).addAttribute(attrClass, toAttrStruct(m_parts));
                             }
                         }
                     }
@@ -1093,20 +1090,16 @@ public abstract class ClassifyUtil {
                 List<Mention> clothingList = new ArrayList<>();
                 List<Mention> agentList = new ArrayList<>();
                 for (Mention m : c.getMentionList()) {
-                    String normText = " " + m.toString().toLowerCase().trim();
                     if (m.getLexicalType().equals("people") ||
-                            m.getLexicalType().equals("animals")) {
+                        m.getLexicalType().equals("animals")) {
                         agentList.add(m);
                     } else if (m.getPronounType().isAnimate()) {
                         agentList.add(m);
-                    } else if (normText.endsWith(" one") ||
-                            normText.endsWith(" other") ||
-                            normText.endsWith(" another") ||
-                            normText.endsWith(" others")) {
-                        agentList.add(m);
                     } else if (m.getLexicalType().equals("clothing")) {
                         clothingList.add(m);
-                    } else if (m.getLexicalType().equals("colots")) {
+                    } else if (m.getLexicalType().equals("colors")) {
+                        clothingList.add(m);
+                    } else if(m.getLexicalType().equals("clothing/colors")){
                         clothingList.add(m);
                     }
                 }
@@ -1140,12 +1133,13 @@ public abstract class ClassifyUtil {
                             if (!attributeDict.containsKey(agent))
                                 attributeDict.put(agent, toAttrStruct(agent));
                             for (Mention cm : clothCluster) {
-                                String clothNormText = cm.getHead().getLemma().toLowerCase();
-                                String attrName = "clothing";
-                                if (_clothAttrLex.containsKey(clothNormText))
-                                    attrName = _clothAttrLex.get(clothNormText);
-                                attributeDict.get(agent).addAttribute(attrName, toAttrStruct(cm));
+                                String clothNormText = cm.toString().toLowerCase();
+                                String clothHead = cm.getHead().getLemma().toLowerCase();
 
+                                String attrClass = "clothing";
+                                if(clothAttrs.containsKey(clothHead))
+                                    if(!clothAttrs.get(clothHead).equals("none"))
+                                        attrClass = clothAttrs.get(clothHead);
 
                                 if (clothNormText.contains("her ")) {
                                     attributeDict.get(agent).clearAttribute("gender");
@@ -1154,6 +1148,7 @@ public abstract class ClassifyUtil {
                                     attributeDict.get(agent).clearAttribute("gender");
                                     attributeDict.get(agent).addAttribute("gender", "male");
                                 }
+                                attributeDict.get(agent).addAttribute(attrClass, toAttrStruct(cm));
                             }
                         }
                     }
@@ -1204,7 +1199,7 @@ public abstract class ClassifyUtil {
         } else if (core instanceof Mention) {
             Mention m = (Mention) core;
             text = m.toString();
-            attr.addAttribute("cardinality", m.getCardinality().toString().replace("|", ","));
+            //attr.addAttribute("cardinality", m.getCardinality().toString().replace("|", ","));
             attr.addAttribute("lexical_type", m.getLexicalType());
             attr.addAttribute("head_lemma", m.getHead().getLemma());
             if (m.getLexicalType().contains("people"))
@@ -1222,7 +1217,7 @@ public abstract class ClassifyUtil {
         return attr;
     }
 
-    private static List<List<Mention>>
+    public static List<List<Mention>>
     collapseMentionListToConstructionList(List<Mention> mentionList, Caption caption) {
         String[] allowedConjArr = {",", "and", ", and", "on and"};
         List<String> allowedConjList = Arrays.asList(allowedConjArr);

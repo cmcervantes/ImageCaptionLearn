@@ -10,16 +10,16 @@ import utilities.*;
 import java.io.File;
 import java.util.*;
 
-import static learn.RelationInference.InferenceType.JOINT;
+import static learn.ILPInference.InferenceType.JOINT;
 
 
-/**The RelationInference class provides static
+/**The ILPInference class provides static
  * functions for computing and reporting the 
  * results of the coreference chain classifier
  * 
  * @author ccervantes
  */
-public class RelationInference
+public class ILPInference
 {
     //private Map<String, Map<Mention, Map<Mention, Integer>>> _relationGraphs;
     //private Map<String, Map<Mention, Map<BoundingBox, Integer>>> _groundingGraphs;
@@ -33,17 +33,10 @@ public class RelationInference
     private Map<String, List<BoundingBox>> _boxDict;
     private Map<String, double[]> _relationScores, _affinityScores, _cardinalityScores, _typeCosts;
     private Set<String> _failedImgs, _fallbackImgs;
-    private double _alpha;
     private String _graphRoot;
-    private String[] _interestingDevImgs = {"65847949.jpg", "2743046728.jpg",
-            "2438452274.jpg", "1049955899.jpg", "4448583121.jpg", "14153510.jpg",
-            "84291062.jpg", "3335692531.jpg", "5075624295.jpg", "7259436202.jpg",
-            "6126520718.jpg", "6990285648.jpg", "8190802361.jpg", "4669642298.jpg",
-            "6530902779.jpg", "4429773871.jpg", "4899353764.jpg", "1177994172.jpg",
-            "6250563782.jpg", "6071314957.jpg"};
     private DoubleDict<String> _groundingAccuracies, _relationAccuracies;
 
-    /**Creates a new RelationInference module, using the specified
+    /**Creates a new ILPInference module, using the specified
      * docSet and nonvisual scores file; Performs combined inference
      * over given scores
      *
@@ -53,10 +46,10 @@ public class RelationInference
      * @param affinityScoresFile
      * @param cardinalityScoresFile
      */
-    public RelationInference(Collection<Document> docSet,
-            String nonvisScoresFile, String relationScoresFile,
-            String typeCostsFile, String affinityScoresFile,
-            String cardinalityScoresFile, String graphRoot, double alpha)
+    public ILPInference(Collection<Document> docSet,
+                        String nonvisScoresFile, String relationScoresFile,
+                        String typeCostsFile, String affinityScoresFile,
+                        String cardinalityScoresFile, String graphRoot, double alpha)
     {
         //If specified, load the last graph attempts
         _relationGraphs = new HashMap<>(); _groundingGraphs = new HashMap<>();
@@ -69,7 +62,6 @@ public class RelationInference
         _failedImgs = new HashSet<>(); _fallbackImgs = new HashSet<>();
         for(Document d : docSet)
             _docDict.put(d.getID(), d);
-        _alpha = alpha;
 
         //Determine if we're using predicted nonvis,
         //based on whether we have a file
@@ -1206,13 +1198,13 @@ public class RelationInference
     {
         switch(_type){
             case RELATION: return new ILPSolverThread(_visualMentionDict.get(docID),
-                    _relationScores, _typeCosts, fixedLinks, constrainTypes, numSolverThreads, _alpha);
+                    _relationScores, _typeCosts, fixedLinks, constrainTypes, numSolverThreads);
             case GROUNDING:
                 return new ILPSolverThread(_visualMentionDict.get(docID),
                     _boxDict.get(docID), _affinityScores, _cardinalityScores, numSolverThreads);
             case JOINT: return new ILPSolverThread(_visualMentionDict.get(docID),
                     _boxDict.get(docID), _relationScores, _typeCosts, _affinityScores,
-                    _cardinalityScores, fixedLinks, constrainTypes, numSolverThreads, _alpha);
+                    _cardinalityScores, fixedLinks, constrainTypes, numSolverThreads);
         }
         return null;
     }

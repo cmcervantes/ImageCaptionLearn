@@ -2,16 +2,14 @@ package core;
 
 import learn.BinaryClassifierScoreDict;
 import learn.ClassifyUtil;
-import learn.RelationInference;
+import learn.ILPInference;
 import learn.WekaMulticlass;
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.impl.Arguments;
 import net.sourceforge.argparse4j.inf.*;
 import net.sourceforge.argparse4j.internal.HelpScreenException;
 import net.sourceforge.argparse4j.internal.UnrecognizedArgumentException;
-import org.apache.commons.lang.ArrayUtils;
 import out.OutTable;
-import statistical.ScoreDict;
 import structures.*;
 import utilities.*;
 
@@ -279,526 +277,552 @@ public class Overlord
             } else if(ns.getBoolean("mod_subset")){
                 Minion.export_modSubsetFeats(docSet, dataSplit);
             } else {
-                List<Double> boxCounts = new ArrayList<>();
-                for(Document d : docSet){
-                    for(BoundingBox b : d.getBoundingBoxSet()){
-                        int numChains = 0;
-                        for(Chain c : d.getChainSet())
-                            if(c.getBoundingBoxSet().contains(b))
-                                numChains++;
-                        boxCounts.add((double)numChains);
-                    }
-                }
-                System.out.println(StatisticalUtil.getMean(boxCounts));
+                String posDir = "/home/ccervan2/source/resources/pos/";
+                String chunkDir = "/home/ccervan2/source/resources/chunk/";
+                String cocoData = Overlord.dataPath + "coco_sub_train_caps.txt";
+
+                Map<String, Caption[]> captionDict =
+                        Minion.readCocoData(cocoData, posDir, chunkDir);
+                List<String> ll_caps = new ArrayList<>();
+                for(String docID : captionDict.keySet())
+                    for(Caption c : captionDict.get(docID))
+                        ll_caps.add(c.toCorefString());
+                FileIO.writeFile(ll_caps, "ex_coco_train_sub", "txt", true);
                 System.exit(0);
 
-                /*
-                List<Chain> noboxChains = new ArrayList<>();
-                List<Mention> nonvisMentions = new ArrayList<>();
-                for(Document d : docSet){
-                    for(Chain c : d.getChainSet())
-                        if(c.getBoundingBoxSet().isEmpty() && !c.getID().equals("0"))
-                            noboxChains.add(c);
-                    for(Mention m : d.getMentionList())
-                        if(m.getChainID().equals("0"))
-                            nonvisMentions.add(m);
-                }
-                OutTable ot_noboxchains = new OutTable("img_id", "chain_id", "mentions", "size");
-                Collections.shuffle(noboxChains);
-                for(int i=0; i<Math.min(500, noboxChains.size()); i++){
-                    Chain c = noboxChains.get(i);
-                    String mentionStr = StringUtil.listToString(c.getMentionSet(), "|");
-                    ot_noboxchains.addRow(c.getDocID(), c.getID(), mentionStr, c.getMentionSet().size());
-                }
-                ot_noboxchains.writeToCsv("ex_noboxChains", true);
+                DoubleDict<String> hist_heur = new DoubleDict<>(), hist_intr = new DoubleDict<>();
+                Map<Mention, Set<Mention>> heur_cloth = new HashMap<>(), heur_part = new HashMap<>(),
+                        intr_cloth = new HashMap<>(), intr_part = new HashMap<>();
+                DoubleDict<String> hist_interstitial = new DoubleDict<>();
 
-                OutTable ot_nonvisMentions = new OutTable("img_id", "cap_idx", "m_idx", "mention", "caption");
-                Map<String, String> capDict = new HashMap<>();
+                //get the heuristic-attached cloth and bodyparts
+                Map<Mention, AttrStruct> attrDict =
+                        ClassifyUtil.attributeAttachment_agent(docSet);
+                for(Mention m_agent : attrDict.keySet()){
+                    AttrStruct as = attrDict.get(m_agent);
+                    Set<Mention> clothing = new HashSet<>(), bodyparts = new HashSet<>();
+                    for(Mention m_attr : as.getAttributeMentions()){
+                        String lexType = m_attr.getLexicalType();
+                        if(lexType.contains("bodyparts"))
+                            bodyparts.add(m_attr);
+                        else if(lexType.contains("clothing") || lexType.contains("colors"))
+                            clothing.add(m_attr);
+                    }
+                    if(!clothing.isEmpty()){
+                        if(!heur_cloth.containsKey(m_agent))
+                            heur_cloth.put(m_agent, new HashSet<>());
+                        heur_cloth.get(m_agent).addAll(clothing);
+                    }
+                    if(!bodyparts.isEmpty()){
+                        if(!heur_part.containsKey(m_agent))
+                            heur_part.put(m_agent, new HashSet<>());
+                        heur_part.get(m_agent).addAll(bodyparts);
+                    }
+
+                    for(Mention m : clothing){
+                        String pair_code;
+                        if(m_agent.getIdx() < m.getIdx())
+                            pair_code = "agent|cloth";
+                        else
+                            pair_code = "cloth|agent";
+                        hist_heur.increment(pair_code);
+                    }
+                    for(Mention m : bodyparts){
+                        String pair_code;
+                        if(m_agent.getIdx() < m.getIdx())
+                            pair_code = "agent|part";
+                        else
+                            pair_code = "part|agent";
+                        hist_heur.increment(pair_code);
+                    }
+                }
+
+                //Get the agent/bodyparts and agent/clothing that are separated by
+                //verbs (subj/obj or interstitial) or preps (interstitial)
+                for(Document d : docSet){
+                    for(Caption c : d.getCaptionList()){
+                        //get subject/object pairings
+                        Map<Mention, Chunk> mentionVerbDict_subj = new HashMap<>();
+                        Map<Mention, Chunk> mentionVerbDict_obj = new HashMap<>();
+                        for(Mention m : c.getMentionList()){
+                            Chunk verb_subj = c.getSubjectOf(m);
+                            Chunk verb_obj = c.getObjectOf(m);
+                            if(verb_subj != null)
+                                mentionVerbDict_subj.put(m, verb_subj);
+                            if(verb_obj != null)
+                                mentionVerbDict_obj.put(m, verb_obj);
+                        }
+                        Map<Chunk, Set<Mention>> verbMentionDict_subj =
+                                Util.invertMap(mentionVerbDict_subj);
+                        Map<Chunk, Set<Mention>> verbMentionDict_obj =
+                                Util.invertMap(mentionVerbDict_obj);
+                        for(Chunk verb_subj : verbMentionDict_subj.keySet()){
+                            Set<Mention> subjOfMentions = verbMentionDict_subj.get(verb_subj);
+                            if(verbMentionDict_obj.containsKey(verb_subj)){
+                                Set<Mention> objOfMentions = verbMentionDict_obj.get(verb_subj);
+                                for(Mention m_subj : subjOfMentions){
+                                    String lexType_subj = m_subj.getLexicalType();
+                                    for(Mention m_obj : objOfMentions) {
+                                        String lexType_obj = m_obj.getLexicalType();
+
+                                        boolean agent_subj = false, agent_obj=false,
+                                                part_subj = false, part_obj = false,
+                                                cloth_subj = false, cloth_obj = false;
+                                        if(m_subj.getPronounType().isAnimate() || lexType_subj.equals("people") ||
+                                           lexType_subj.equals("animals"))
+                                            agent_subj = true;
+                                        if(m_obj.getPronounType().isAnimate() || lexType_obj.equals("people") ||
+                                                lexType_obj.equals("animals"))
+                                            agent_obj = true;
+                                        if(lexType_subj.equals("bodyparts"))
+                                            part_subj = true;
+                                        if(lexType_obj.equals("bodyparts"))
+                                            part_obj = true;
+                                        if(lexType_subj.equals("clothing") || lexType_subj.equals("colors") || lexType_subj.equals("clothing/colors"))
+                                            cloth_subj = true;
+                                        if(lexType_obj.equals("clothing") || lexType_obj.equals("colors") || lexType_obj.equals("clothing/colors"))
+                                            cloth_obj = true;
+
+                                        //determine what kind of pairing this is
+                                        String pair_code = null;
+                                        if(agent_subj){
+                                            if(part_obj){
+                                                if(!intr_part.containsKey(m_subj))
+                                                    intr_part.put(m_subj, new HashSet<>());
+                                                intr_part.get(m_subj).add(m_obj);
+                                                if(m_subj.getIdx() < m_obj.getIdx())
+                                                    pair_code = "agent|part";
+                                                else
+                                                    pair_code = "part|agent";
+                                            } else if(cloth_obj){
+                                                if(!intr_cloth.containsKey(m_subj))
+                                                    intr_cloth.put(m_subj, new HashSet<>());
+                                                intr_cloth.get(m_subj).add(m_obj);
+                                                if(m_subj.getIdx() < m_obj.getIdx())
+                                                    pair_code = "agent|cloth";
+                                                else
+                                                    pair_code = "cloth|agent";
+                                            }
+                                        } else if (agent_obj) {
+                                            if(part_subj){
+                                                if(!intr_part.containsKey(m_obj))
+                                                    intr_part.put(m_obj, new HashSet<>());
+                                                intr_part.get(m_obj).add(m_subj);
+                                                if(m_obj.getIdx() < m_subj.getIdx())
+                                                    pair_code = "agent|part";
+                                                else
+                                                    pair_code = "part|agent";
+                                            } else if(cloth_subj){
+                                                if(!intr_cloth.containsKey(m_obj))
+                                                    intr_cloth.put(m_obj, new HashSet<>());
+                                                intr_cloth.get(m_obj).add(m_subj);
+                                                if(m_obj.getIdx() < m_subj.getIdx())
+                                                    pair_code = "agent|cloth";
+                                                else
+                                                    pair_code = "cloth|agent";
+                                            }
+                                        }
+
+                                        if(pair_code != null) {
+                                            hist_intr.increment(pair_code);
+                                            hist_interstitial.increment(verb_subj.getChunkType());
+                                            hist_interstitial.increment(verb_subj.toString().toLowerCase());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        List<Mention> mentions = c.getMentionList();
+                        for(int i=0; i<mentions.size(); i++){
+                            Mention m_i = mentions.get(i);
+                            String lexType_i = m_i.getLexicalType();
+                            for(int j=i+1; j<mentions.size(); j++){
+                                Mention m_j = mentions.get(j);
+                                String lexType_j = m_j.getLexicalType();
+                                List<Chunk> intrsttl = c.getInterstitialChunks(m_i, m_j);
+                                if(intrsttl.size() == 1){
+                                    String pair_case = "";
+                                    if(lexType_i.equals("people") || lexType_i.equals("animals") || m_i.getPronounType().isAnimate()){
+                                        if(lexType_j.equals("bodyparts"))
+                                            pair_case = "agent|part";
+                                        else if(lexType_j.equals("clothing") || lexType_j.equals("colors") || lexType_j.equals("clothing/colors"))
+                                            pair_case = "agent|cloth";
+                                    } else if(lexType_j.equals("people") || lexType_j.equals("animals") || m_j.getPronounType().isAnimate()){
+                                        if(lexType_i.equals("bodyparts"))
+                                            pair_case = "part|agent";
+                                        else if(lexType_i.equals("clothing") || lexType_i.equals("colors") || lexType_i.equals("clothing/colors"))
+                                            pair_case = "cloth|agent";
+                                    }
+
+                                    if(pair_case.equals("agent|part")){
+                                        if(!intr_part.containsKey(m_i))
+                                            intr_part.put(m_i, new HashSet<>());
+                                        if(!intr_part.get(m_i).contains(m_j)){
+                                            intr_part.get(m_i).add(m_j);
+                                            hist_intr.increment(pair_case);
+
+                                            hist_interstitial.increment(intrsttl.get(0).toString().toLowerCase());
+                                            hist_interstitial.increment(intrsttl.get(0).getChunkType());
+                                        }
+                                    } else if(pair_case.equals("part|agent")){
+                                        if(!intr_part.containsKey(m_j))
+                                            intr_part.put(m_j, new HashSet<>());
+                                        if(!intr_part.get(m_j).contains(m_i)){
+                                            intr_part.get(m_j).add(m_i);
+                                            hist_intr.increment(pair_case);
+
+                                            hist_interstitial.increment(intrsttl.get(0).toString().toLowerCase());
+                                            hist_interstitial.increment(intrsttl.get(0).getChunkType());
+                                        }
+                                    } else if(pair_case.equals("agent|cloth")){
+                                        if(!intr_cloth.containsKey(m_i))
+                                            intr_cloth.put(m_i, new HashSet<>());
+                                        if(!intr_cloth.get(m_i).contains(m_j)){
+                                            intr_cloth.get(m_i).add(m_j);
+                                            hist_intr.increment(pair_case);
+
+                                            hist_interstitial.increment(intrsttl.get(0).toString().toLowerCase());
+                                            hist_interstitial.increment(intrsttl.get(0).getChunkType());
+                                        }
+                                    } else if(pair_case.equals("cloth|agent")){
+                                        if(!intr_cloth.containsKey(m_j))
+                                            intr_cloth.put(m_j, new HashSet<>());
+                                        if(!intr_cloth.get(m_j).contains(m_i)){
+                                            intr_cloth.get(m_j).add(m_i);
+                                            hist_intr.increment(pair_case);
+
+                                            hist_interstitial.increment(intrsttl.get(0).toString().toLowerCase());
+                                            hist_interstitial.increment(intrsttl.get(0).getChunkType());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Logger.log("Heuristic Attachment");
+                System.out.println(hist_heur);
+                Logger.log("Verb/Interstitial Attachment");
+                System.out.println(hist_intr);
+                FileIO.writeFile(hist_interstitial, "hist_interstitial_attatch", "csv", true);
+
+
+                Set<String> pairIDs_parts_heur = new HashSet<>(), pairIDs_cloth_heur = new HashSet<>(),
+                        pairIDs_parts_intr = new HashSet<>(), pairIDs_cloth_intr = new HashSet<>();
+                for(Mention agent : heur_cloth.keySet())
+                    for(Mention cloth : heur_cloth.get(agent))
+                        pairIDs_cloth_heur.add(Document.getMentionPairStr(agent, cloth));
+                for(Mention agent : heur_part.keySet())
+                    for(Mention part : heur_part.get(agent))
+                        pairIDs_parts_heur.add(Document.getMentionPairStr(agent, part));
+                for(Mention agent : intr_cloth.keySet())
+                    for(Mention cloth : intr_cloth.get(agent))
+                        pairIDs_cloth_intr.add(Document.getMentionPairStr(agent, cloth));
+                for(Mention agent : intr_part.keySet())
+                    for(Mention part : intr_part.get(agent))
+                        pairIDs_parts_intr.add(Document.getMentionPairStr(agent, part));
+
+                Logger.log("Heuristic Pairs");
+                System.out.printf("cloth: %d; parts: %d\n", pairIDs_cloth_heur.size(), pairIDs_parts_heur.size());
+                Logger.log("Interstitial Pairs");
+                System.out.printf("cloth: %d; parts: %d\n", pairIDs_cloth_intr.size(), pairIDs_parts_intr.size());
+                Logger.log("Intersection");
+                Set<String> intersect_cloth = new HashSet<>(pairIDs_cloth_heur);
+                intersect_cloth.retainAll(pairIDs_cloth_intr);
+                Set<String> intersect_parts = new HashSet<>(pairIDs_parts_heur);
+                intersect_parts.retainAll(pairIDs_parts_intr);
+                System.out.printf("cloth: %d; parts: %d\n", intersect_cloth.size(), intersect_parts.size());
+
+
+
+                System.exit(0);
+
+
+
+
+
+                DoubleDict<String> hist_relation = new DoubleDict<>();
+                DoubleDict<String> verbHist_so = new DoubleDict<>();
+                DoubleDict<String> verbHist_intrsttl = new DoubleDict<>();
+                DoubleDict<String> prepHist = new DoubleDict<>();
+                for(Document d : docSet){
+
+
+                    for(Caption c : d.getCaptionList()){
+                        int numMentions = c.getMentionList().size();
+                        hist_relation.increment("total_pairs",
+                                0.5 * numMentions * (numMentions - 1));
+
+                        Set<Mention[]> mentionPairs_verb = new HashSet<>();
+                        Set<Mention[]> mentionPairs_prep = new HashSet<>();
+                        Set<Mention[]> mentionPairs_intrstlVerb = new HashSet<>();
+
+                        Map<Mention, Chunk> mentionVerbDict_subj = new HashMap<>();
+                        Map<Mention, Chunk> mentionVerbDict_obj = new HashMap<>();
+                        for(Mention m : c.getMentionList()){
+                            Chunk verb_subj = c.getSubjectOf(m);
+                            Chunk verb_obj = c.getObjectOf(m);
+                            if(verb_subj != null)
+                                mentionVerbDict_subj.put(m, verb_subj);
+                            if(verb_obj != null)
+                                mentionVerbDict_obj.put(m, verb_obj);
+                        }
+                        Map<Chunk, Set<Mention>> verbMentionDict_subj =
+                                Util.invertMap(mentionVerbDict_subj);
+                        Map<Chunk, Set<Mention>> verbMentionDict_obj =
+                                Util.invertMap(mentionVerbDict_obj);
+                        for(Chunk verb_subj : verbMentionDict_subj.keySet()){
+                            Set<Mention> subjOfMentions = verbMentionDict_subj.get(verb_subj);
+                            if(verbMentionDict_obj.containsKey(verb_subj)){
+                                Set<Mention> objOfMentions = verbMentionDict_obj.get(verb_subj);
+                                for(Mention m_subj : subjOfMentions){
+                                    for(Mention m_obj : objOfMentions) {
+                                        Mention[] pair = {m_subj, m_obj};
+                                        if(!Util.containsArr(mentionPairs_verb, pair)) {
+                                            mentionPairs_verb.add(pair);
+                                            List<Token> toks = verb_subj.getTokenList();
+                                            verbHist_so.increment("\""+toks.get(toks.size()-1).getLemma().toLowerCase()+"\"");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        List<Mention> mentions = c.getMentionList();
+                        for(int i=0; i<mentions.size(); i++){
+                            Mention m_i = mentions.get(i);
+                            for(int j=i+1; j<mentions.size(); j++){
+                                Mention m_j = mentions.get(j);
+                                List<Chunk> intrsttl = c.getInterstitialChunks(m_i, m_j);
+                                if(intrsttl.size() == 1){
+                                    Mention[] pair = {m_i, m_j};
+                                    if(intrsttl.get(0).getChunkType().equals("VP")){
+                                        if(!Util.containsArr(mentionPairs_intrstlVerb, pair)) {
+                                            mentionPairs_intrstlVerb.add(pair);
+                                            List<Token> toks = intrsttl.get(0).getTokenList();
+                                            verbHist_intrsttl.increment("\""+toks.get(toks.size()-1).getLemma().toLowerCase()+"\"");
+                                        }
+                                    } else if(intrsttl.get(0).getChunkType().equals("PP")){
+                                        if(!Util.containsArr(mentionPairs_prep, pair)) {
+                                            mentionPairs_prep.add(pair);
+                                            prepHist.increment("\""+intrsttl.get(0).toString().toLowerCase()+"\"");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        hist_relation.increment("verb_so_pairs", mentionPairs_verb.size());
+                        hist_relation.increment("prep_pairs", mentionPairs_prep.size());
+                        hist_relation.increment("verb_pairs", mentionPairs_intrstlVerb.size());
+
+                        int verbIntersect = 0, prepIntersect = 0;
+                        for(Mention[] pair_verb : mentionPairs_verb){
+                            if(Util.containsArr(mentionPairs_intrstlVerb, pair_verb))
+                                verbIntersect++;
+                            if(Util.containsArr(mentionPairs_prep, pair_verb))
+                                prepIntersect++;
+                        }
+                        hist_relation.increment("verb_intersect", verbIntersect);
+                        hist_relation.increment("prep_intersect", prepIntersect);
+                    }
+                }
+                for(String rel : hist_relation.getSortedByValKeys(true))
+                    System.out.printf("%s : %d (%.2f%%)\n", rel, (int)hist_relation.get(rel),
+                            100.0 * hist_relation.get(rel) / hist_relation.get("total_pairs"));
+                FileIO.writeFile(verbHist_so, "hist_verb_subjObj", "csv", true);
+                FileIO.writeFile(verbHist_intrsttl, "hist_verb_intrsttl", "csv", true);
+                FileIO.writeFile(prepHist, "hist_prep", "csv", true);
+                System.exit(0);
+
+                DoubleDict<String> hist_heads = new DoubleDict<>();
+                Map<String, DoubleDict<String>> yHist_perX = new HashMap<>();
+                DoubleDict<String> hist_chunkTypes = new DoubleDict<>();
+                DoubleDict<String> hist_chunkStrs = new DoubleDict<>();
+                DoubleDict<String> hist_xblanky = new DoubleDict<>();
+                for(Document d : docSet){
+                    for(Caption c : d.getCaptionList()){
+                        List<Mention> mentions = c.getMentionList();
+                        for(int i=0; i<mentions.size(); i++){
+                            Mention m_i = mentions.get(i);
+                            String xHead = m_i.getHead().getLemma().toLowerCase();
+                            if(i < mentions.size() - 1){
+                                Mention m_j = mentions.get(i+1);
+                                String yHead = m_j.getHead().getLemma().toLowerCase();
+
+                                List<Chunk> interstChunks = c.getInterstitialChunks(m_i, m_j);
+
+                                //List<Token> interstToks = c.getInterstitialTokens(m_i, m_j);
+                                //if(interstToks.size() == 1 && interstToks.get(0).toString().equals("of")){
+
+                                if(interstChunks.size() == 1){
+                                    hist_chunkTypes.increment(interstChunks.get(0).getChunkType());
+                                    hist_chunkStrs.increment(interstChunks.get(0).toString());
+
+                                    hist_heads.increment(xHead);
+                                    if(!yHist_perX.containsKey(xHead))
+                                        yHist_perX.put(xHead, new DoubleDict<>());
+                                    yHist_perX.get(xHead).increment(yHead);
+
+                                    hist_xblanky.increment("\"" + xHead + "\",\"" +
+                                            interstChunks.get(0).toString().toLowerCase() +
+                                            "\",\"" + yHead + "\"");
+                                }
+                            }
+                        }
+                    }
+                }
+                List<String> ll_hist = new ArrayList<>();
+                double ttl = hist_chunkStrs.getSum();
+                for(String chunkStr : hist_chunkStrs.getSortedByValKeys(true))
+                    ll_hist.add(String.format("\"%s\",%d,%f", chunkStr, (int)hist_chunkStrs.get(chunkStr),
+                            hist_chunkStrs.get(chunkStr) / ttl));
+                FileIO.writeFile(ll_hist, "hist_interstitial_chunks", "csv", true);
+                ttl = hist_chunkTypes.getSum();
+                for(String chunkType : hist_chunkTypes.getSortedByValKeys(true))
+                    System.out.printf("%s: %d (%.2f%%)\n", chunkType, (int)hist_chunkTypes.get(chunkType),
+                            100.0 * hist_chunkTypes.get(chunkType) / ttl);
+
+                List<String> ll_xblanky = new ArrayList<>();
+                ttl = hist_xblanky.getSum();
+                for(String xblanky : hist_xblanky.getSortedByValKeys(true))
+                    ll_xblanky.add(xblanky + "," + hist_xblanky.get(xblanky) +
+                            "," + (hist_xblanky.get(xblanky)/ ttl));
+                FileIO.writeFile(ll_xblanky, "ex_xblanky", "csv", true);
+                System.exit(0);
+
+                OutTable ot_xofy = new OutTable("x_head", "category", "freq", "y_head");
+                double ttl_xofy = hist_heads.getSum();
+                for(String xHead : hist_heads.getSortedByValKeys(true)){
+                    List<String> yHeads =
+                            new ArrayList<>(yHist_perX.get(xHead).getSortedByValKeys(true));
+                    double totalYCount = yHist_perX.get(xHead).getSum();
+                    List<String> yHeadWithFreqs = new ArrayList<>();
+                    for(int i=0; i<Math.min(10, yHeads.size()); i++){
+                        String yHead = yHeads.get(i);
+                        yHeadWithFreqs.add(String.format("%s (%.2f%%) ",
+                                yHead, 100.0 * yHist_perX.get(xHead).get(yHead) / totalYCount));
+                    }
+                    ot_xofy.addRow(xHead, "", (int)hist_heads.get(xHead),
+                            hist_heads.get(xHead) / ttl_xofy,
+                            StringUtil.listToString(yHeadWithFreqs, "|"));
+                }
+                ot_xofy.writeToCsv("hist_xofy_lemmas", true);
+
+                System.exit(0);
+                /*
+                Set<String> imgIDs = new HashSet<>(); imgIDs.add("76739724.jpg");
+                DBConnector conn = new DBConnector(mysql_params[0], mysql_params[1], mysql_params[2],mysql_params[3]);
+                docSet = DocumentLoader.getDocumentSet(conn, imgIDs);*/
+
+
+                Map<Mention, AttrStruct> attributeDict =
+                        ClassifyUtil.attributeAttachment_agent(docSet);
+                DoubleDict<AttrStruct> attrFreqs = new DoubleDict<>();
+                Map<Mention, String> mentionCapDict = new HashMap<>();
                 for(Document d : docSet)
                     for(Caption c : d.getCaptionList())
-                        capDict.put(d.getID() + "#" + c.getIdx(), c.toString());
-                Collections.shuffle(nonvisMentions);
-                for(int i=0; i<Math.min(500, nonvisMentions.size()); i++){
-                    Mention m = nonvisMentions.get(i);
-                    ot_nonvisMentions.addRow(m.getDocID(), m.getCaptionIdx(), m.getIdx(),
-                            m.toString(), capDict.get(m.getDocID() + "#" + m.getCaptionIdx()));
+                        for(Mention m : c.getMentionList())
+                            mentionCapDict.put(m, c.toString());
+
+                for(Mention m : attributeDict.keySet()){
+                    AttrStruct as = attributeDict.get(m);
+                    attrFreqs.increment(as, as.getNumAttributes());
                 }
-                ot_nonvisMentions.writeToCsv("ex_nonvis", true);
-**/
-                /*
-
-                double chains_nobox = 0.0, sing_nobox = 0.0;
-                List<Double> boxCounts = new ArrayList<>();
-                List<Double> mentionCounts_cap = new ArrayList<>();
-                List<Double> chainCounts = new ArrayList<>();
-                List<Double> mentionCounts_chain = new ArrayList<>();
-                List<Double> nonvisCount = new ArrayList<>();
-                List<Double> anaphoric_pro = new ArrayList<>();
-                List<Double> deictic_pro = new ArrayList<>();
-                double singletonChains = 0.0, singletonBoxChains = 0.0;
-                List<Double> boxesPerChain = new ArrayList<>();
-                for(Document d : docSet){
-                    double chainCount = 0;
-                    for(Chain c : d.getChainSet()){
-                        if(!c.getID().equals("0")){
-                            if(c.getBoundingBoxSet().isEmpty()) {
-                                chains_nobox++;
-                                if(c.getMentionSet().size() == 1)
-                                    sing_nobox++;
-                            } else if(c.getMentionSet().size() == 1){
-                                singletonBoxChains++;
-                            }
-                            chainCount++;
-
-                            if(c.getMentionSet().size() == 1)
-                                singletonChains++;
-
-                            boxesPerChain.add((double)c.getBoundingBoxSet().size());
-                        }
-                        mentionCounts_chain.add((double)c.getMentionSet().size());
+                int attr_idx = 0;
+                List<String> ll_attr = new ArrayList<>();
+                for(AttrStruct as : attrFreqs.getSortedByValKeys(true)){
+                    attr_idx++;
+                    if(attr_idx < 10) {
+                        ll_attr.add(as.toLatexString());
+                        String cap = "";
+                        for(Mention m : as.getAttributeMentions())
+                            if(mentionCapDict.containsKey(m))
+                                cap = mentionCapDict.get(m);
+                        ll_attr.add(cap);
+                        ll_attr.add("");
                     }
-                    chainCounts.add(chainCount);
-                    boxCounts.add((double)d.getBoundingBoxSet().size());
-                    for(Caption c : d.getCaptionList())
-                        mentionCounts_cap.add((double)c.getMentionList().size());
-                    int numNonvis = 0;
-                    for(Mention m : d.getMentionList())
-                        if(m.getChainID().equals("0"))
-                            numNonvis++;
-                    nonvisCount.add((double)numNonvis / (double)d.getMentionList().size());
-                    int numAna = 0, numDeic = 0;
-                    for(Mention m : d.getMentionList()){
-                        if(m.getPronounType() != Mention.PRONOUN_TYPE.NONE){
-                            if(m.getPronounType() == Mention.PRONOUN_TYPE.SEMI)
-                                numDeic++;
-                            else
-                                numAna++;
+                }
+                attr_idx = 0;
+                for(AttrStruct as : attrFreqs.getSortedByValKeys(false)){
+                    if(!as.getAttributeMentions().isEmpty()){
+                        attr_idx++;
+                        if(attr_idx < 10) {
+                            ll_attr.add(as.toLatexString());
+                            String cap = "";
+                            for(Mention m : as.getAttributeMentions())
+                                if(mentionCapDict.containsKey(m))
+                                    cap = mentionCapDict.get(m);
+                            ll_attr.add(cap);
+                            ll_attr.add("");
                         }
                     }
-                    anaphoric_pro.add((double)numAna);
-                    deictic_pro.add((double)numDeic);
                 }
+                FileIO.writeFile(ll_attr, "ex_attr", "txt", true);
 
-
-
-                double numMentions = StatisticalUtil.getSum(mentionCounts_cap);
-                System.out.printf("%s: %.4f\n", "boxes per image", StatisticalUtil.getMean(boxCounts));
-                System.out.printf("%s: %.4f\n", "mentions per caption", StatisticalUtil.getMean(mentionCounts_cap));
-                System.out.printf("%s: %.4f\n", "mentions per image", numMentions / docSet.size());
-                System.out.printf("%s: %.4f\n", "chains per image", StatisticalUtil.getMean(chainCounts));
-                System.out.printf("%s: %.4f\n", "mentions per chain", StatisticalUtil.getMean(mentionCounts_chain));
-                System.out.printf("%s: %.4f\n", "nonvis", StatisticalUtil.getMean(nonvisCount));
-                System.out.printf("%s: %.4f\n", "anaphoric", StatisticalUtil.getSum(anaphoric_pro) / numMentions);
-                System.out.printf("%s: %.4f\n", "deictic", StatisticalUtil.getSum(deictic_pro) / numMentions);
-                System.out.printf("%s: %.4f\n", "singleton chains", singletonChains);
-                System.out.printf("%s: %.4f\n", "sing_nobox chains", sing_nobox);
-                System.out.printf("%s: %.4f\n", "sing_box chains", singletonBoxChains);
-                System.out.printf("%s: %.4f\n", "total_nobox chains", chains_nobox);
-                System.out.printf("%s: %.4f\n", "total chains", StatisticalUtil.getSum(chainCounts));
-                System.out.printf("%s: %.4f\n", "boxes per chain", StatisticalUtil.getMean(boxesPerChain));
-
+                //Minion.export_attachmentCases(docSet);
                 System.exit(0);
-
-
-                DoubleDict<Document> subsetEx = new DoubleDict<>();
+                /*
+                DoubleDict<String> clothFreq = new DoubleDict<>();
+                DoubleDict<String> partFreq = new DoubleDict<>();
                 for(Document d : docSet){
-                    int numNonvis = 0;
-                    for(Mention m : d.getMentionList())
-                        if(m.getChainID().equals("0"))
-                            numNonvis++;
-                    double subsetChains = Math.log(d.getSubsetChains().size()) -
-                            Math.log(d.getChainSet().size());
-                    double nonvisCounts = Math.log(numNonvis) - Math.log(d.getMentionList().size());
-                    subsetEx.increment(d, subsetChains + nonvisCounts - Math.log(d.getBoundingBoxSet().size()));
-                    //subsetEx.increment(d, (double)d.getSubsetChains().size() / (double)d.getChainSet().size() *
-                    //        (double)numNonvis / (double)d.getMentionList().size());
-
-                    boolean foundCrowd = false, foundBand = false, foundNonvis = false;
-                    for(Mention m : d.getMentionList()){
-                        if(m.getChainID().equals("0"))
-                            foundNonvis = true;
-                        if(m.toString().contains("band"))
-                            foundBand = true;
-                        if(m.toString().contains("crowd"))
-                            foundCrowd = true;
+                    for(Caption c : d.getCaptionList()){
+                        List<Mention> agentList = new ArrayList<>();
+                        List<Mention> partList = new ArrayList<>();
+                        List<Mention> clothList = new ArrayList<>();
+                        for(Mention m : c.getMentionList()){
+                            if(m.getLexicalType().equals("people") || m.getLexicalType().equals("animals") ||
+                               m.getPronounType().isAnimate()){
+                                agentList.add(m);
+                            } else if(m.getLexicalType().equals("bodyparts")){
+                                partList.add(m);
+                            } else if(m.getLexicalType().equals("clothing") || m.getLexicalType().equals("colors") ||
+                                    m.getLexicalType().equals("clothing/colors")){
+                                clothList.add(m);
+                            }
+                        }
+                        List<List<Mention>> agentClusters =
+                                ClassifyUtil.collapseMentionListToConstructionList(agentList, c);
+                        List<List<Mention>> clothClusters =
+                                ClassifyUtil.collapseMentionListToConstructionList(clothList, c);
+                        if(partList.size() > 0)
+                            partFreq.increment(agentClusters.size() + "|" + partList.size());
+                        if(clothClusters.size() > 0)
+                            clothFreq.increment(agentClusters.size() + "|" + clothClusters.size());
                     }
                 }
-                int biff = 0;
-                for(Document d : subsetEx.getSortedByValKeys(true)){
-                    System.out.println(d.getID());
-                    for(Chain[] pair : d.getSubsetChains())
-                        System.out.println(pair[0].getID() + "|"  + pair[1].getID());
-                    biff++;
-                    if(biff > 20)
-                        System.exit(0);
-                }
+                FileIO.writeFile(partFreq, "hist_parts", "csv", true);
+                FileIO.writeFile(clothFreq, "hist_cloths", "csv", true);
+                System.exit(0);*/
+
+                /*
+                Set<String> docIDs = new HashSet<>();
+                docIDs.add("4059698218.jpg");
+                DBConnector conn = new DBConnector(mysql_params[0], mysql_params[1], mysql_params[2],mysql_params[3]);
+                docSet = DocumentLoader.getDocumentSet(conn, docIDs);
 */
-
-
-                BinaryClassifierScoreDict nonvisScores =
-                        new BinaryClassifierScoreDict("/home/ccervan2/source/data/feats/nonvis_test_20170215.scores");
-                ScoreDict<Integer> nonvisScoreDict_model = new ScoreDict<>();
-                ScoreDict<Integer> nonvisScoreDict_heur = new ScoreDict<>();
-                String[][] nonvisTable = FileIO.readFile_table(Overlord.resourcesDir + "hist_nonvisual.csv");
-                Set<String> nonvisHeads = new HashSet<>();
-                for(String[] row : nonvisTable){
-                    if(Double.parseDouble(row[1]) > 10)
-                        nonvisHeads.add(row[0]);
-                }
-
-                for(Document d : docSet){
-                    for(Mention m : d.getMentionList()){
-                        int gold = m.getChainID().equals("0") ? 1 : 0;
-                        int pred_model = nonvisScores.get(m) >= 0 ? 1 : 0;
-                        int pred_heur = nonvisHeads.contains(m.getHead().toString().toLowerCase()) ? 1 : 0;
-                        nonvisScoreDict_model.increment(gold, pred_model);
-                        nonvisScoreDict_heur.increment(gold, pred_heur);
-                    }
-                }
-                System.out.println("NONVIS MODEL");
-                nonvisScoreDict_model.printCompleteScores();
-                System.out.println("NONVIS HEURISTIC");
-                nonvisScoreDict_heur.printCompleteScores();
-                System.exit(0);
-
-
                 /*
-                Set<String> interestingIDs = new HashSet<>();
-                for(Document d : docSet){
-                    boolean hasSubset = d.getSubsetChains().size() > 0;
-                    int numSemiPronom = 0, numPronom = 0, numNonvis = 0, numMultibox = 0;
-                    for(Mention m : d.getMentionList()){
-                        if(m.getPronounType() == Mention.PRONOUN_TYPE.SEMI)
-                            numSemiPronom++;
-                        else if(m.getPronounType() != Mention.PRONOUN_TYPE.NONE)
-                            numPronom++;
-
-                        if(m.getChainID().equals("0"))
-                            numNonvis++;
-
-                        if(d.getBoxSetForMention(m).size() > 1)
-                            numMultibox++;
-                    }
-
-                    if(hasSubset && numSemiPronom > 1 && numPronom > 1 && numNonvis > 1 && numMultibox > 1){
-                        interestingIDs.add("\"" + d.getID() + "\"");
-                    }
-                }
-                System.out.println("{" + StringUtil.listToString(interestingIDs, ", ") + "}");
-                System.exit(0);
-                */
-
-                String intraScoreFile = Overlord.dataPath + "feats/relation_dev_20170220_intra.scores";
-                Map<String, double[]> intraScores = ClassifyUtil.readMccScoresFile(intraScoreFile);
-                System.out.println(intraScores.size());
-                System.out.println(new ArrayList<>(intraScores.keySet()).get(0));
-                OutTable ot_intra = new OutTable("doc_id", "cap_idx", "m_1_idx", "m_2_idx",
-                        "m_1", "m_2", "gold", "pred", "n", "c", "b", "p", "caption");
-                for(Document d : docSet){
-                    List<Mention> mentions = d.getMentionList();
-                    Set<String> subsetMentions = d.getSubsetMentions();
-                    for(int i=0; i<mentions.size(); i++){
-                        Mention m_i = mentions.get(i);
-                        for(int j=i+1; j<mentions.size(); j++){
-                            Mention m_j = mentions.get(j);
-
-                            if(m_i.getCaptionIdx() != m_j.getCaptionIdx())
-                                continue;
-
-                            String id_ij = Document.getMentionPairStr(m_i, m_j);
-                            String id_ji = Document.getMentionPairStr(m_j, m_i);
-
-                            int gold_ij = -1, gold_ji = -1;
-                            if(!m_i.getChainID().equals("0") && !m_j.getChainID().equals("0")){
-                                gold_ij = 0; gold_ji = 0;
-                                if(m_i.getChainID().equals(m_j.getChainID())){
-                                    gold_ij = 1; gold_ji = 1;
-                                } else if(subsetMentions.contains(id_ij)){
-                                    gold_ij = 2; gold_ji = 3;
-                                } else if(subsetMentions.contains(id_ji)){
-                                    gold_ji = 2; gold_ij = 3;
-                                }
-                            }
-
-                            double[] scores_ij = intraScores.get(id_ij);
-                            double[] scores_ji = intraScores.get(id_ji);
-                            if(scores_ij != null && scores_ji != null) {
-                                if(gold_ij > 0 || Util.getMaxIdx(ArrayUtils.toObject(scores_ij)) > 0)
-                                    ot_intra.addRow(d.getID(), m_i.getCaptionIdx(),
-                                        m_i.getIdx(), m_j.getIdx(), m_i.toString(),
-                                        m_j.toString(), gold_ij,
-                                        Util.getMaxIdx(ArrayUtils.toObject(scores_ij)),
-                                        scores_ij[0], scores_ij[1], scores_ij[2],
-                                        scores_ij[3], d.getCaption(m_i.getCaptionIdx()));
-                                if(gold_ji > 0 || Util.getMaxIdx(ArrayUtils.toObject(scores_ji)) > 0)
-                                    ot_intra.addRow(d.getID(), m_j.getCaptionIdx(),
-                                        m_j.getIdx(), m_i.getIdx(), m_j.toString(),
-                                        m_i.toString(), gold_ji,
-                                        Util.getMaxIdx(ArrayUtils.toObject(scores_ji)),
-                                        scores_ji[0], scores_ji[1],
-                                        scores_ji[2], scores_ji[3], d.getCaption(m_j.getCaptionIdx()));
-                            }
-                        }
-                    }
-                }
-                ot_intra.writeToCsv("ex_intra_cap_rel", true);
-                System.exit(0);
-
-
-
-
-
-
-
-
-
-
-                String relationFile = "/home/ccervan2/source/data/feats/flickr30kEntities_v2_relation_dev.scores";
-                String affinityFile = "/home/ccervan2/source/data/feats/flickr30kEntities_v2_affinity_dev.scores";
-                String cardinalityFile = "/home/ccervan2/source/data/feats/flickr30kEntities_v2_box_card_dev.scores";
-                String typeCostFile = Overlord.resourcesDir + "hist_typePairLogProb.csv";
-                Map<String, double[]> affinityScoreDict = ClassifyUtil.readMccScoresFile(affinityFile);
-                Map<String, double[]> cardScoreDict = ClassifyUtil.readMccScoresFile(cardinalityFile);
-
-                for(Document d : docSet){
-                    if(d.getID().equals("2934801096.jpg")){
-                        for(String pairID : d.getSubsetMentions()){
-                            Map<String, String> dict = StringUtil.keyValStrToDict(pairID);
-                            System.out.println(dict.get("caption_1") + dict.get("mention_1") + "|" +
-                                    dict.get("caption_2") + dict.get("mention_2"));
-                        }
-
-                        for(Mention m : d.getMentionList()){
-                            if(cardScoreDict.containsKey(m.getUniqueID())){
-                                System.out.print("" + m.getCaptionIdx() + m.getIdx() + "\t");
-                                double[] scores = cardScoreDict.get(m.getUniqueID());
-                                for(double score : scores)
-                                    System.out.print(score + " | ");
-                                System.out.println();
-                            }
-                            Set<BoundingBox> assocBoxes = d.getBoxSetForMention(m);
-
-                            for(BoundingBox b : d.getBoundingBoxSet()){
-                                String id = m.getUniqueID() + "|" + b.getUniqueID();
-                                if(affinityScoreDict.containsKey(id)){
-                                    System.out.print("" + m.getCaptionIdx() + m.getIdx() + "|" + b.getIdx() + "\t");
-                                    System.out.print(assocBoxes.contains(b) + "\t");
-                                    double[] scores = affinityScoreDict.get(id);
-                                    for(double score : scores)
-                                        System.out.print(score + " | ");
-                                    System.out.println();
-                                }
-                            }
-                        }
-                    }
-                }
-                System.exit(0);
-
-
-                String cardScoreFile = Overlord.dataPath + "feats/flickr30kEntities_v2_box_card_dev.scores";
-                Map<String, double[]> cardScores = ClassifyUtil.readMccScoresFile(cardScoreFile);
-                OutTable ot_card = new OutTable("doc_id", "cap_idx", "m_idx", "mention", "gold_card", "pred_card",
-                        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11+");
+                DoubleDict<String> clothHeads = new DoubleDict<>();
+                DoubleDict<String> partHeads = new DoubleDict<>();
                 for(Document d : docSet){
                     for(Mention m : d.getMentionList()){
-                        Set<BoundingBox> assocBoxes = d.getBoxSetForMention(m);
-                        if(cardScores.containsKey(m.getUniqueID())){
-                            double[] scores = cardScores.get(m.getUniqueID());
-                            ot_card.addRow(d.getID(), m.getCaptionIdx(), m.getIdx(),
-                                    m.toString(), assocBoxes.size(), Util.getMaxIdx(ArrayUtils.toObject(scores)),
-                                    scores[0], scores[1], scores[2], scores[3], scores[4], scores[5],
-                                    scores[6], scores[7], scores[8], scores[9], scores[10], scores[11]);
+                        if(!m.getChainID().equals("0")){
+                            if(m.getLexicalType().contains("clothing"))
+                                clothHeads.increment(m.getHead().getLemma().toLowerCase());
+                            if(m.getLexicalType().contains("bodyparts"))
+                                partHeads.increment(m.getHead().getLemma().toLowerCase());
                         }
                     }
                 }
-                ot_card.writeToCsv("ex_card", true);
+                FileIO.writeFile(clothHeads, "hist_clothHead", "csv", false);
+                FileIO.writeFile(partHeads, "hist_bodypartHead", "csv", false);
+                System.exit(0);*/
 
 
 
 
 
-
-                List<String> docIds = new ArrayList<>();
-                docIds.add("2934801096.jpg");
-                DBConnector conn = new DBConnector(dbPath);
-                docSet = DocumentLoader.getDocumentSet(conn, docIds);
-
-
-
-                /*
-                RelationInference relInf = new RelationInference(docSet, null,
-                            relationFile, typeCostFile, null, null,
-                            false, 0.0);
-                relInf.infer(numThreads, false);
-                relInf.evaluate(false);
-
-                relInf = new RelationInference(docSet, null,
-                        null, null, affinityFile, cardinalityFile,
-                        false, 0.0);
-                relInf.infer(numThreads, false);
-                relInf.evaluate(false);
-                */
-                RelationInference relInf = new RelationInference(docSet, null,
-                        relationFile, typeCostFile, affinityFile, cardinalityFile,
-                        null, 0.0);
-                relInf.infer(numThreads, false);
-                relInf.evaluate(false);
-                System.exit(0);
-
-
-
-                //Minion.export_typePairFreq(docSet);
-
-
-
-
-
-
-
-                DoubleDict<String> chainPairs = new DoubleDict<>();
-                for(Document d : docSet){
-                    Set<Chain[]> subsetChains = d.getSubsetChains();
-
-                    List<Chain> chains = new ArrayList<>(d.getChainSet());
-                    for(int i=0; i<chains.size(); i++){
-                        Chain c_i = chains.get(i);
-                        Set<BoundingBox> boxes_i = c_i.getBoundingBoxSet();
-
-                        for(int j=i+1; j<chains.size(); j++){
-                            Chain c_j = chains.get(j);
-                            Set<BoundingBox> boxes_j = c_j.getBoundingBoxSet();
-
-                            Set<BoundingBox> intersect = new HashSet<>(boxes_i);
-                            intersect.retainAll(boxes_j);
-
-                            if(intersect.size() == boxes_i.size() && intersect.size() == boxes_j.size()) {
-                                if(Util.containsArr(subsetChains, new Chain[]{c_i, c_j})){
-                                    chainPairs.increment("subset_sameBox");
-                                } else if(Util.containsArr(subsetChains, new Chain[]{c_j, c_i})){
-                                    chainPairs.increment("subset_sameBox");
-                                } else {
-                                    chainPairs.increment("sameBox");
-                                }
-                            } else {
-                                chainPairs.increment("diffBoxes");
-                            }
-                        }
-                    }
-                }
-                double totalBoxes = chainPairs.getSum();
-                for(String key : chainPairs.keySet())
-                    chainPairs.divide(key, totalBoxes);
-                System.out.println(chainPairs);
-                System.exit(0);
-
-
-                DoubleDict<String> heterogTypeDict = new DoubleDict<>();
-                double total = 0.0;
-                for(Document d : docSet){
-                    for(Chain c : d.getChainSet()){
-                        Set<String> types = new HashSet<>();
-                        for(Mention m : c.getMentionSet())
-                            if(m.getPronounType() == Mention.PRONOUN_TYPE.NONE)
-                                types.add(m.getLexicalType());
-                        List<String> typeList = new ArrayList<>(types);
-                        Collections.sort(typeList);
-                        if(typeList.size() > 1){
-                            if(typeList.size() != 2 || !typeList.contains("other"))
-                                heterogTypeDict.increment(StringUtil.listToString(typeList, "|"));
-                        }
-                    }
-                    total += d.getChainSet().size();
-                }
-                for(String types : heterogTypeDict.keySet())
-                    heterogTypeDict.divide(types, total);
-                FileIO.writeFile(heterogTypeDict, "hist_heterogChains_deleteme", "csv", true);
-                System.out.println(heterogTypeDict.getSum());
-                System.exit(0);
-
-
-
-
-
-                DoubleDict<Integer> mentionPairs = new DoubleDict<>();
-                DoubleDict<Integer> mentionBoxPairs = new DoubleDict<>();
-                DoubleDict<Integer> combined = new DoubleDict<>();
-                for(Document d : docSet){
-                    int mentions = d.getMentionList().size();
-                    int boxes = d.getBoundingBoxSet().size();
-                    mentionPairs.increment(mentions * mentions);
-                    mentionBoxPairs.increment(mentions * boxes);
-                    combined.increment(mentions * mentions * boxes);
-                }
-                System.out.println("------- grounding ------");
-                List<Integer> keys = new ArrayList<>(mentionBoxPairs.keySet());
-                Collections.sort(keys);
-                for(Integer key : keys)
-                    System.out.println(key + ": " + mentionBoxPairs.get(key));
-                System.out.println("------- relation ------");
-                keys = new ArrayList<>(mentionPairs.keySet());
-                Collections.sort(keys);
-                for(Integer key : keys)
-                    System.out.println(key + ": " + mentionPairs.get(key));
-                System.out.println("------- combined ------");
-                keys = new ArrayList<>(combined.keySet());
-                Collections.sort(keys);
-                for(Integer key : keys)
-                    System.out.println(key + ": " + combined.get(key));
-
-
-                System.exit(0);
-
-
-
-
-
-                //Minion.export_nonvisuals(docSet);
-
-                DoubleDict<String> heterogTypes = new DoubleDict<>();
-                int totalChains = 0;
-                for(Document d : docSet){
-                    Set<String> types = new HashSet<>();
-                    totalChains += d.getChainSet().size();
-                    for(Chain c : d.getChainSet()){
-                        for(Mention m : c.getMentionSet())
-                            types.add(m.getLexicalType());
-                        if(types.size() > 1){
-                            List<String> typeList = new ArrayList<>(types);
-                            Collections.sort(typeList);
-                            heterogTypes.increment(StringUtil.listToString(typeList, "|"));
-                        }
-                    }
-                }
-                for(String t : heterogTypes.keySet())
-                    heterogTypes.divide(t, totalChains);
-                System.out.println(heterogTypes);
-                System.out.println(heterogTypes.getSum());
-
-                System.exit(0);
-
-
-                BinaryClassifierScoreDict nonvis_scoreDict =
-                        new BinaryClassifierScoreDict(Overlord.dataPath + "feats/flickr30kEntities_v2_nonvis_dev.scores");
-
-                for(Document d : docSet){
-                    Set<Mention> gold_nonvis = new HashSet<>();
-                    Set<Mention> pred_nonvis = new HashSet<>();
-                    for(Mention m : d.getMentionList()){
-                        if(m.getChainID().equals("0"))
-                            gold_nonvis.add(m);
-                        if(nonvis_scoreDict.get(m) > 0)
-                            pred_nonvis.add(m);
-                    }
-                    Set<Mention> intersect = new HashSet<>(gold_nonvis);
-                    intersect.retainAll(pred_nonvis);
-
-                    if(!intersect.isEmpty() && gold_nonvis.size() != pred_nonvis.size()){
-                        System.out.println("---" + d.getID() + "----");
-                        System.out.println("Gold Nonvis: " + StringUtil.listToString(gold_nonvis, " | "));
-                        System.out.println("Pred Nonvis: " + StringUtil.listToString(pred_nonvis, " | "));
-                    }
-                }
-                System.exit(0);
             }
         } else if(argList.contains("Data")) {
             String featsFileToConvert = ns.getString("convert_to_arff");
@@ -842,17 +866,17 @@ public class Overlord
             String typeCostFile = Overlord.resourcesDir + "hist_typePairLogProb.csv";
 
             //Set up the relation inference module
-            RelationInference relInf = null;
+            ILPInference relInf = null;
             switch(ns.getString("inf_type")){
-                case "relation": relInf = new RelationInference(docSet, nonvisFile,
+                case "relation": relInf = new ILPInference(docSet, nonvisFile,
                         relationFile, typeCostFile, null, null,
                         ns.getString("graph_root"), ns.getDouble("alpha"));
                     break;
-                case "grounding": relInf = new RelationInference(docSet, nonvisFile,
+                case "grounding": relInf = new ILPInference(docSet, nonvisFile,
                         null, null, affinityFile, cardinalityFile,
                         ns.getString("graph_root"), ns.getDouble("alpha"));
                     break;
-                case "joint": relInf = new RelationInference(docSet, nonvisFile,
+                case "joint": relInf = new ILPInference(docSet, nonvisFile,
                         relationFile, typeCostFile, affinityFile, cardinalityFile,
                         ns.getString("graph_root"), ns.getDouble("alpha"));
                     break;
