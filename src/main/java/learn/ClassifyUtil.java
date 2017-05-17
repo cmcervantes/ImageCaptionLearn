@@ -96,40 +96,40 @@ public abstract class ClassifyUtil {
     private static void _featurePreprocessing(Collection<Document> docSet)
     {
         Logger.log("Feature preprocessing (onehot index dictionaries)");
-        _typePairs = _loadOnehotDict(Overlord.resourcesDir + "hist_typePair_ordered.csv", 1000);
-        _leftPairs = _loadOnehotDict(Overlord.resourcesDir + "hist_leftPair_ordered.csv", 1000);
-        _rightPairs = _loadOnehotDict(Overlord.resourcesDir + "hist_rightPair_ordered.csv", 1000);
-        _headPairs = _loadOnehotDict(Overlord.resourcesDir + "hist_headPair_ordered.csv", 1);
-        _lemmaPairs = _loadOnehotDict(Overlord.resourcesDir + "hist_lemmaPair_ordered.csv", 1);
-        _subjOfPairs = _loadOnehotDict(Overlord.resourcesDir + "hist_subjOfPair_ordered.csv", 1);
-        _objOfPairs = _loadOnehotDict(Overlord.resourcesDir + "hist_objOfPair_ordered.csv", 1);
-        _modifierPairs = _loadOnehotDict(Overlord.resourcesDir + "hist_modifierPair.csv", 1);
-        _numericPairs = _loadOnehotDict(Overlord.resourcesDir + "hist_numericModifierPair.csv", 1);
-        _prepositionPairs = _loadOnehotDict(Overlord.resourcesDir + "hist_prepositionPair.csv", 1);
-        _heads = _loadOnehotDict(Overlord.resourcesDir + "hist_head.csv", 1);
-        _modifiers = _loadOnehotDict(Overlord.resourcesDir + "hist_modifier.csv", 1);
-        _numerics = _loadOnehotDict(Overlord.resourcesDir + "hist_numericModifier.csv", 1);
-        _prepositions = _loadOnehotDict(Overlord.resourcesDir + "hist_preposition.csv", 1);
-        _types = _loadOnehotDict(Overlord.resourcesDir + "hist_type.csv", 1000);
-        _lefts = _loadOnehotDict(Overlord.resourcesDir + "hist_left.csv", 1000);
-        _rights = _loadOnehotDict(Overlord.resourcesDir + "hist_right.csv", 1000);
-        _subjOfs = _loadOnehotDict(Overlord.resourcesDir + "hist_subjOf.csv", 1);
-        _objOfs = _loadOnehotDict(Overlord.resourcesDir + "hist_objOf.csv", 1);
-        _pronouns = _loadOnehotDict(Overlord.resourcesDir + "hist_pronoun.csv", 1);
-        _pronounTypes = _loadOnehotDict(Overlord.resourcesDir + "hist_pronounType.csv", 0);
-        _nonvisuals = _loadOnehotDict(Overlord.resourcesDir + "hist_nonvisual.csv", 1);
+        _typePairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_typePair_ordered.csv", 1000);
+        _leftPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_leftPair_ordered.csv", 1000);
+        _rightPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_rightPair_ordered.csv", 1000);
+        _headPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_headPair_ordered.csv", 1);
+        _lemmaPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_lemmaPair_ordered.csv", 1);
+        _subjOfPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_subjOfPair_ordered.csv", 1);
+        _objOfPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_objOfPair_ordered.csv", 1);
+        _modifierPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_modifierPair.csv", 1);
+        _numericPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_numericModifierPair.csv", 1);
+        _prepositionPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_prepositionPair.csv", 1);
+        _heads = _loadOnehotDict(Overlord.flickr30kResources + "hist_head.csv", 1);
+        _modifiers = _loadOnehotDict(Overlord.flickr30kResources + "hist_modifier.csv", 1);
+        _numerics = _loadOnehotDict(Overlord.flickr30kResources + "hist_numericModifier.csv", 1);
+        _prepositions = _loadOnehotDict(Overlord.flickr30kResources + "hist_preposition.csv", 1);
+        _types = _loadOnehotDict(Overlord.flickr30kResources + "hist_type.csv", 1000);
+        _lefts = _loadOnehotDict(Overlord.flickr30kResources + "hist_left.csv", 1000);
+        _rights = _loadOnehotDict(Overlord.flickr30kResources + "hist_right.csv", 1000);
+        _subjOfs = _loadOnehotDict(Overlord.flickr30kResources + "hist_subjOf.csv", 1);
+        _objOfs = _loadOnehotDict(Overlord.flickr30kResources + "hist_objOf.csv", 1);
+        _pronouns = _loadOnehotDict(Overlord.flickr30kResources + "hist_pronoun.csv", 1);
+        _pronounTypes = _loadOnehotDict(Overlord.flickr30kResources + "hist_pronounType.csv", 0);
+        _nonvisuals = _loadOnehotDict(Overlord.flickr30kResources + "hist_nonvisual.csv", 1);
 
         _hypernyms = new ArrayList<>();
-        for(String[] row : FileIO.readFile_table(Overlord.resourcesDir + "hist_hypernym.csv"))
+        for(String[] row : FileIO.readFile_table(Overlord.flickr30kResources + "hist_hypernym.csv"))
             _hypernyms.add(row[0]);
 
         //read other from files
-        _colors = new HashSet<>(FileIO.readFile_lineList(Overlord.resourcesDir + "colors.txt"));
-        _stopWords = new HashSet<>(FileIO.readFile_lineList(Overlord.resourcesDir + "stop_words.txt"));
+        _colors = new HashSet<>(FileIO.readFile_lineList(Overlord.flickr30kResources + "colors.txt"));
+        _stopWords = new HashSet<>(FileIO.readFile_lineList(Overlord.flickr30kResources + "stop_words.txt"));
         List<String> dets = new ArrayList<>();
         _detSet_singular = new HashSet<>();
         _detSet_plural = new HashSet<>();
-        String[][] detTable = FileIO.readFile_table(Overlord.resourcesDir + "dets.csv");
+        String[][] detTable = FileIO.readFile_table(Overlord.flickr30kResources + "dets.csv");
         for (String[] row : detTable) {
             if (row.length > 1) {
                 dets.add(row[0]);
@@ -290,7 +290,7 @@ public abstract class ClassifyUtil {
         int docIdx = 0;
         for(int i=0; i<numThreads; i++) {
             Document d = docList.get(docIdx);
-            threadPool[i] = new ExtractionThread(d, ExtractionThreadType.PAIRWISE);
+            threadPool[i] = new ExtractionThread(d, ExtractionThreadType.TACL_201703_RELATION);
             docIdx++;
         }
 
@@ -324,7 +324,7 @@ public abstract class ClassifyUtil {
                         Logger.logStatus("Processed %d images (%.2f%%)",
                                 docIdx, 100.0*(double)docIdx / docList.size());
                         Document d = docList.get(docIdx);
-                        threadPool[i] = new ExtractionThread(d, ExtractionThreadType.PAIRWISE);
+                        threadPool[i] = new ExtractionThread(d, ExtractionThreadType.TACL_201703_RELATION);
                         docIdx++;
                         threadPool[i].start();
                         foundLiveThread = true;
@@ -518,7 +518,7 @@ public abstract class ClassifyUtil {
         List<Document> docList = new ArrayList<>(docSet);
 
         Logger.log("Initializing stop words"); //stop words courtesy of http://www.ranks.nl/
-        _stopWords = new HashSet<>(FileIO.readFile_lineList(Overlord.resourcesDir + "stop_words.txt"));
+        _stopWords = new HashSet<>(FileIO.readFile_lineList(Overlord.flickr30kResources + "stop_words.txt"));
 
         Logger.log("Reading vocabulary from documents");
         Set<String> vocabulary = new HashSet<>();
@@ -956,12 +956,12 @@ public abstract class ClassifyUtil {
         Map<Mention, AttrStruct> attributeDict = new HashMap<>();
 
         Logger.log("Loading frequent heads / attribute locations from files");
-        String[][] clothAttrTable = FileIO.readFile_table(Overlord.resourcesDir + "hist_clothHead.csv");
+        String[][] clothAttrTable = FileIO.readFile_table(Overlord.flickr30kResources + "hist_clothHead.csv");
         Map<String, String> clothAttrs = new HashMap<>();
         for (String[] row : clothAttrTable)
             if(row.length > 2)
                 clothAttrs.put(row[0], row[1]);
-        String[][] bodypartAttrTable = FileIO.readFile_table(Overlord.resourcesDir + "hist_bodypartHead.csv");
+        String[][] bodypartAttrTable = FileIO.readFile_table(Overlord.flickr30kResources + "hist_bodypartHead.csv");
         Map<String, String> bodypartAttrs = new HashMap<>();
         for(String[] row : bodypartAttrTable)
             if(row.length > 2)
@@ -1350,7 +1350,7 @@ public abstract class ClassifyUtil {
 
     private enum ExtractionThreadType
     {
-        AFFINITY, PAIRWISE
+        TACL_201703_AFFINITY, TACL_201703_RELATION
     }
 
     private static class ExtractionThread extends Thread
@@ -1373,9 +1373,9 @@ public abstract class ClassifyUtil {
         public void run()
         {
             switch(_type){
-                case AFFINITY: run_affinity();
+                case TACL_201703_AFFINITY: run_affinity();
                     break;
-                case PAIRWISE: run_relation();
+                case TACL_201703_RELATION: run_relation();
                     break;
             }
         }
@@ -1486,8 +1486,8 @@ public abstract class ClassifyUtil {
                             if(_doc.getIsTrain() && m_j.getChainID().equals("0"))
                                 continue;
 
-                            fvSet.add(getPairwiseFeatureVector(m_i, m_j));
-                            fvSet.add(getPairwiseFeatureVector(m_j, m_i));
+                            fvSet.add(getRelationFeatureVector(m_i, m_j));
+                            fvSet.add(getRelationFeatureVector(m_j, m_i));
                         }
                     }
                 }
@@ -1500,7 +1500,7 @@ public abstract class ClassifyUtil {
          * @param m2
          * @return
          */
-        private FeatureVector getPairwiseFeatureVector(Mention m1, Mention m2)
+        private FeatureVector getRelationFeatureVector(Mention m1, Mention m2)
         {
             int currentIdx = 1;
             List<Object> featureList = new ArrayList<>();
@@ -1520,8 +1520,10 @@ public abstract class ClassifyUtil {
             //Head matches
             String head_1 = m1.getHead().toString().toLowerCase();
             String head_2 = m2.getHead().toString().toLowerCase();
+            String headPos_1 = m1.getHead().getPosTag();
+            String headPos_2 = m2.getHead().getPosTag();
             Integer f_headMatch = head_1.equals(head_2) ? TRUE : FALSE;
-            Integer f_headPOSMatch = m1.getHead().getPosTag().equals(m2.getHead().getPosTag()) ? TRUE : FALSE;
+            Integer f_headPOSMatch = headPos_1.equals(headPos_2) ? TRUE : FALSE;
             featureList.add(f_headMatch);
             addMetaEntry("head_match", currentIdx++, _metaDict);
             featureList.add(f_headPOSMatch);

@@ -814,11 +814,16 @@ public class ILPInference
                 d.getID().replace(".jpg", "") + "_key", "conll", false);
 
         //Write the response file
-        if(predChainSet == null){
+        Set<Chain> predChainSet_conll = new HashSet<>();
+        if(predChainSet == null) {
             Logger.log("Document %s has no predicted chains", d.getID());
-            predChainSet = new HashSet<>();
+        } else {
+            //if we have a chain set, remove chain 0 for the conll file
+            for(Chain c : predChainSet)
+                if(!c.getID().equals("0"))
+                    predChainSet_conll.add(c);
         }
-        List<String> lineList_resp = Document.toConll2012(d, predChainSet);
+        List<String> lineList_resp = Document.toConll2012(d, predChainSet_conll);
         lineList_resp.add(0, "#begin document (" + d.getID() + "); part 000");
         lineList_resp.add("#end document");
         FileIO.writeFile(lineList_resp, outDir +
@@ -1062,9 +1067,19 @@ public class ILPInference
                     c.addMention(m);
                 chainSet.add(c);
             }
+
+            //In order to make the display look correct (with nonvisuals)
+            //we want to add all predicted nonvisual mentions as chain 0
+            Chain nonvisChain = new Chain(d.getID(), "0");
+            for(Mention m : d.getMentionList())
+                if(_nonvisMentions.contains(m.getUniqueID()))
+                    nonvisChain.addMention(m);
+            chainSet.add(nonvisChain);
+
             if(!chainSet.isEmpty())
                 predChains.put(d.getID(), chainSet);
         }
+
         return predChains;
     }
 

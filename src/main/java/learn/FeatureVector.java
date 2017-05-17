@@ -54,6 +54,27 @@ public class FeatureVector
         return 0.0;
     }
 
+    /**Returns this feature vector's values as a dense vector
+     *
+     * @return
+     */
+    public List<Double> toDenseVector()
+    {
+        int maxIdx = Integer.MIN_VALUE;
+        for(int idx : _featureValueDict.keySet())
+            if(idx > maxIdx)
+                maxIdx = idx;
+
+        List<Double> fvList = new ArrayList<>();
+        for(int i=1; i<=maxIdx; i++){
+            double val = 0.0;
+            if(_featureValueDict.containsKey(i))
+                val = _featureValueDict.get(i);
+            fvList.add(val);
+        }
+        return fvList;
+    }
+
     @Override
     public String toString()
     {
