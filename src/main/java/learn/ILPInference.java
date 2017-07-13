@@ -290,7 +290,7 @@ public class ILPInference
             table.add(row);
         }
         Logger.log("Pairwise confusion");
-        System.out.println(StringUtil.toTableStr(table));
+        System.out.println(StringUtil.toTableStr(table, true));
     }
 
     private void _printDocumentScoreDict(Map<Document, ScoreDict<String>> docScoreDict, String filename)

@@ -35,6 +35,22 @@ public class FeatureVector
         this.comments = comments;
     }
 
+    /**Constructor directly using arrays of indices and values,
+     * mimicking the behavior of calling addFeature repeatedly
+     *
+     * @param indices
+     * @param values
+     */
+    public FeatureVector(int[] indices, double[] values, double label, String comments)
+    {
+        this.label = label;
+        this.comments = comments;
+
+        _featureValueDict = new HashMap<>();
+        for(int i=0; i<indices.length; i++)
+            addFeature(indices[i], values[i]);
+    }
+
     public void addFeature(int idx, double value)
     {
         _featureValueDict.put(idx, value);

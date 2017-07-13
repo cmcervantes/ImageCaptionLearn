@@ -261,18 +261,51 @@ public abstract class ClassifyUtil {
         }
     }
 
-    /**Exports relation features to [outroot].feats, using the given docSet, and
-     * number of threads
+    /**Exports relation features to outroot.feats, using the given collection of
+     * Documents, number of threads, and whether to include the subset and
+     * partOf labels (2/3 and 4, respectively)
      *
-     * @param docSet
-     * @param outroot
-     * @param numThreads
+     * @param docSet        Collection of Documents for which to extract features
+     * @param outroot       Root of the file to write features to
+     * @param numThreads    Size of the thread pool
+     * @param includeSubset Whether to include the subset label (2/3)
+     * @param includePartOf Whether to include the partOf label (4)
      */
-    public static void exportFeatures_relation(Collection<Document> docSet, String outroot, int numThreads)
+    public static void exportFeatures_relation(Collection<Document> docSet, String outroot,
+                                               int numThreads, boolean includeSubset,
+                                               boolean includePartOf)
     {
+        //One of the problems we've run into is accounting for
+        //the exact number of feature vectors we expect, how many we process,
+        //and how many we get; we therefore need to keep better track of this
+        int numValidMentionPairs = 0;
+        for(Document d : docSet){
+            List<Mention> mentionList = d.getMentionList();
+            for(int i=0; i<mentionList.size(); i++){
+                Mention m_i = mentionList.get(i);
+                Mention.PRONOUN_TYPE type_i = m_i.getPronounType();
+                if(type_i == Mention.PRONOUN_TYPE.NONE || type_i == Mention.PRONOUN_TYPE.SEMI){
+                    if(d.getIsTrain() && m_i.getChainID().equals("0"))
+                        continue;
+                    for(int j=i+1; j<mentionList.size(); j++){
+                        Mention m_j = mentionList.get(j);
+                        Mention.PRONOUN_TYPE type_j = m_j.getPronounType();
+                        if(type_j == Mention.PRONOUN_TYPE.NONE || type_j == Mention.PRONOUN_TYPE.SEMI){
+                            if(d.getIsTrain() && m_j.getChainID().equals("0"))
+                                continue;
+                            numValidMentionPairs += 2;
+                        }
+                    }
+                }
+            }
+        }
+        int numFeatureVectors = 0;
+
+
         //Feature preprocessing
         _featurePreprocessing(docSet);
 
+        //Open the feature file for writing
         _outroot = outroot + ".feats";
         Logger.log("Opening [" +_outroot+ "] for writing");
         BufferedWriter bw = null;
@@ -283,21 +316,23 @@ public abstract class ClassifyUtil {
             System.exit(0);
         }
 
+        //Put the documents in an ordered list and initialize the thread pool
         List<Document> docList = new ArrayList<>(docSet);
-        ExtractionThread[] threadPool = new ExtractionThread[numThreads];
+        RelationExtractionThread[] threadPool = new RelationExtractionThread[numThreads];
 
         //create and start our first set of threads
         int docIdx = 0;
         for(int i=0; i<numThreads; i++) {
             Document d = docList.get(docIdx);
-            threadPool[i] = new ExtractionThread(d, ExtractionThreadType.TACL_201703_RELATION);
+            threadPool[i] = new RelationExtractionThread(d, includeSubset, includePartOf);
             docIdx++;
         }
+
 
         for(int i=0; i<threadPool.length; i++)
             threadPool[i].start();
         boolean foundLiveThread = true;
-        Set<String> addedDocIDs = new HashSet<>();
+        Set<String> addedFeatureVectors = new HashSet<>();
         DoubleDict<Integer> labelDistro = new DoubleDict<>();
         while(docIdx < docList.size() || foundLiveThread) {
             foundLiveThread = false;
@@ -305,14 +340,21 @@ public abstract class ClassifyUtil {
                 if(threadPool[i].isAlive()) {
                     foundLiveThread = true;
                 } else {
-                    addedDocIDs.add(threadPool[i]._doc.getID());
                     //if this is a dead thread, store it
                     try{
                         for(FeatureVector fv : threadPool[i].fvSet) {
-                            bw.write(fv.toString() + "\n");
-                            labelDistro.increment((int)fv.label);
+                            //UPDATE: For reasons I don't quite understand, we can't
+                            //simply not add threads for documents we've already added
+                            //(there's some duplication happening) so now, at the vector level,
+                            //we only add new vectors; this has removed our dup problem
+
+                            if(!addedFeatureVectors.contains(fv.comments)){
+                                bw.write(fv.toString() + "\n");
+                                labelDistro.increment((int)fv.label);
+                                numFeatureVectors++;
+                                addedFeatureVectors.add(fv.comments);
+                            }
                         }
-                        addedDocIDs.add(threadPool[i]._doc.getID());
                     } catch (IOException ioEx){
                         Logger.log(ioEx);
                     }
@@ -324,7 +366,7 @@ public abstract class ClassifyUtil {
                         Logger.logStatus("Processed %d images (%.2f%%)",
                                 docIdx, 100.0*(double)docIdx / docList.size());
                         Document d = docList.get(docIdx);
-                        threadPool[i] = new ExtractionThread(d, ExtractionThreadType.TACL_201703_RELATION);
+                        threadPool[i] = new RelationExtractionThread(d, includeSubset, includePartOf);
                         docIdx++;
                         threadPool[i].start();
                         foundLiveThread = true;
@@ -341,22 +383,26 @@ public abstract class ClassifyUtil {
         //go through the thread pool one last time to
         //collect the last of our threads
         for(int i=0; i<numThreads; i++) {
-            if(!addedDocIDs.contains(threadPool[i]._doc.getID())){
-                try{
-                    for(FeatureVector fv : threadPool[i].fvSet) {
+            try{
+                for(FeatureVector fv : threadPool[i].fvSet) {
+                    if(!addedFeatureVectors.contains(fv.comments)){
                         bw.write(fv.toString() + "\n");
                         labelDistro.increment((int)fv.label);
+                        numFeatureVectors++;
+                        addedFeatureVectors.add(fv.comments);
                     }
-                    addedDocIDs.add(threadPool[i]._doc.getID());
-                } catch (IOException ioEx){
-                    Logger.log(ioEx);
                 }
-                addedDocIDs.add(threadPool[i]._doc.getID());
+            } catch(IOException ioEx){
+                Logger.log(ioEx);
             }
         }
 
         Logger.log("Label distro");
-        System.out.println(labelDistro.toString());
+        System.out.print(labelDistro.toString());
+        Logger.log("Feature vectors");
+        System.out.println("Mention Pairs:   " + numValidMentionPairs);
+        System.out.println("Feature Vectors: " + numFeatureVectors);
+        System.out.println("Labels:          " + labelDistro.getSum());
 
         Logger.log("Closing [" + _outroot + "]");
         try {
@@ -364,7 +410,7 @@ public abstract class ClassifyUtil {
         } catch(IOException ioEx) {
             System.err.println("Could not save output file " + _outroot);
         }
-        JsonIO.writeFile(ExtractionThread.getMetaDict(), outroot + "_meta", false);
+        JsonIO.writeFile(RelationExtractionThread.getMetaDict(), outroot + "_meta", false);
     }
 
     /**Exports nonvisual features to [outroot].feats, using the given docSet
@@ -1348,126 +1394,55 @@ public abstract class ClassifyUtil {
             metaDict.put(featName, new Integer[]{startIdx, endIdx});
     }
 
-    private enum ExtractionThreadType
-    {
-        TACL_201703_AFFINITY, TACL_201703_RELATION
-    }
-
-    private static class ExtractionThread extends Thread
+    /**In order to (drastically) improve relation feature extraction
+     * speed, we parallelize this operation giving each document
+     * their own thread
+     *
+     */
+    private static class RelationExtractionThread extends Thread
     {
         private static Map<String, Object> _metaDict = new HashMap<>();
-
         private Document _doc;
-        private ExtractionThreadType _type;
         private Set<String> _subsetMentions;
-        public Collection<FeatureVector> fvSet;
+        private Set<String> _partOfMentions;
+        Collection<FeatureVector> fvSet;
 
-        public ExtractionThread(Document doc, ExtractionThreadType type)
+        /**Initializes a RelationExtractionThread, which extracts
+         * features for relation prediction for the given
+         * Document's mentions
+         *
+         * @param doc           Document for which mention features
+         *                      will be extracted
+         * @param includeSubset Whether to include the subset label (2/3)
+         * @param includePartOf Whether to include the partOf label (4)
+         */
+        RelationExtractionThread(Document doc, boolean includeSubset, boolean includePartOf)
         {
             _doc = doc;
-            _type = type;
             fvSet = new HashSet<>();
-            _subsetMentions = _doc.getSubsetMentions();
+            _subsetMentions = new HashSet<>();
+            _partOfMentions = new HashSet<>();
+
+            //Vary what we load into memory based on the labeling scheme
+            if(includeSubset)
+                _subsetMentions = _doc.getSubsetMentions();
+            if(includePartOf)
+                _partOfMentions = _doc.getPartOfMentions();
         }
 
-        public void run()
-        {
-            switch(_type){
-                case TACL_201703_AFFINITY: run_affinity();
-                    break;
-                case TACL_201703_RELATION: run_relation();
-                    break;
-            }
-        }
-
-        @Deprecated
-        private void run_affinity()
-        {
-            //read our box features for this image
-            List<String> ll_boxFeats =
-                    FileIO.readFile_lineList(Overlord.boxFeatureDir +
-                            _doc.getID().replace(".jpg", ".feats"));
-            Map<String, FeatureVector> boxFeats = new HashMap<>();
-            for(String featStr : ll_boxFeats){
-                FeatureVector fv = FeatureVector.parseFeatureVector(featStr);
-                boxFeats.put(fv.comments, fv);
-            }
-            if(ll_boxFeats.isEmpty())
-                Logger.log("Found no box features for " + _doc.getID());
-
-            //load our mention features for all mentions in this doc
-            Map<String, List<Double>> mentionFeats = new HashMap<>();
-            for(Mention m : _doc.getMentionList()){
-                List<List<Double>> vectorList = new ArrayList<>();
-                for(Token t : m.getTokenList()){
-                    List<Double> vecToAdd = _w2vUtil.getVector(t.toString().toLowerCase().trim());
-                    if(vecToAdd.size() < 300){
-                        System.err.printf("Token %s has vector size %d\n",
-                                t.toString(), vecToAdd.size());
-                    }
-                    vectorList.add(vecToAdd);
-                }
-                List<Double> meanVec = Util.vectorMean(vectorList);
-                if(meanVec.size() < 300){
-                    System.err.printf("Mention %s has vector size %d\n",
-                            m.toString(), meanVec.size());
-                }
-                mentionFeats.put(m.getUniqueID(), meanVec);
-            }
-
-            //finally, concatenate and save the vectors
-            List<String> vectors = new ArrayList<>();
-            List<String> vectors_pos = new ArrayList<>();
-            List<String> vectors_neg = new ArrayList<>();
-            Set<String> posWords = new HashSet<>();
-            for(BoundingBox b : _doc.getBoundingBoxSet()){
-                FeatureVector fv_box = boxFeats.get(b.getUniqueID());
-                Set<Mention> mentionSet_box = _doc.getMentionSetForBox(b);
-
-                for(Mention m : _doc.getMentionList()){
-                    List<Double> fv_mention = mentionFeats.get(m.getUniqueID());
-
-                    List<Double> concat = new ArrayList<>();
-                    for(int i=1; i<=4096; i++) {
-                        Double val = 0.0;
-                        if (fv_box != null) {
-                            Double x = fv_box.getFeatureValue(i);
-                            if (x != null)
-                                val = x;
-                        }
-                        concat.add(val);
-                    }
-                    fv_mention.stream().forEachOrdered(v -> concat.add(v));
-
-                    int label = 0;
-                    if(mentionSet_box.contains(m))
-                        label = 1;
-
-                    String ID = b.getUniqueID() + "|" + m.getUniqueID();
-
-                    /*
-                    if(label == 1) {
-                        posWords.add(m.getHead().toString().toLowerCase().trim());
-                        vectors_pos.add(ID + "," + label + "," + StringUtil.listToString(concat, ","));
-                    } else if(!posWords.contains(m.getHead().toString().toLowerCase().trim())){
-                        vectors_neg.add(ID + "," + label + "," + StringUtil.listToString(concat, ","));
-                    }*/
-                    vectors.add(ID + "," + label + "," + StringUtil.listToString(concat, ","));
-                }
-            }
-            //List<String> vectors = new ArrayList<>();
-            //vectors.addAll(vectors_pos);
-            //Collections.shuffle(vectors_neg);
-            //vectors.addAll(vectors_neg.subList(0, Math.min(vectors_pos.size(), vectors_neg.size())-1));
-            FileIO.writeFile(vectors, _outroot + _doc.getID().replace(".jpg", ""), "feats", false);
-        }
-
+        /**Returns the meta-dict for these relation features
+         *
+         * @return  Mapping of feature name to feature indices
+         */
         public static Map<String, Object> getMetaDict()
         {
             return _metaDict;
         }
 
-        private void run_relation()
+        /**Extracts relation features for each ordered pair
+         * of mentions in this thread's document
+         */
+        public void run()
         {
             List<Mention> mentionList = _doc.getMentionList();
             for(int i=0; i<mentionList.size(); i++){
@@ -1486,21 +1461,22 @@ public abstract class ClassifyUtil {
                             if(_doc.getIsTrain() && m_j.getChainID().equals("0"))
                                 continue;
 
-                            fvSet.add(getRelationFeatureVector(m_i, m_j));
-                            fvSet.add(getRelationFeatureVector(m_j, m_i));
+                            fvSet.add(_getRelationFeatureVector(m_i, m_j));
+                            fvSet.add(_getRelationFeatureVector(m_j, m_i));
                         }
                     }
                 }
             }
         }
 
-        /**Return a complete pairwise feature vector
+        /**Return a complete pairwise feature vector, given the
+         * ordered pair of mentions
          *
-         * @param m1
-         * @param m2
-         * @return
+         * @param m1    First mention in the pair
+         * @param m2    Second mention in the pair
+         * @return      FeatureVector for the ordered mention pair
          */
-        private FeatureVector getRelationFeatureVector(Mention m1, Mention m2)
+        private FeatureVector _getRelationFeatureVector(Mention m1, Mention m2)
         {
             int currentIdx = 1;
             List<Object> featureList = new ArrayList<>();
@@ -1903,6 +1879,8 @@ public abstract class ClassifyUtil {
                 else if(_subsetMentions.contains(id_ji))
                     label = 3; //Superset relation; assumes other
                                //vector from this pair will be 2
+                else if(_partOfMentions.contains(id_ij))
+                    label = 4; //Part of relations are asymmetrical
             }
 
             addMetaEntry("max_idx", currentIdx+1, _metaDict);

@@ -107,7 +107,7 @@ public class ScoreDict<K>
         return 100.0 * _correctDict.getSum() / _goldDict.getSum();
     }
 
-    public double getRMSE() {return StatisticalUtil.getRMSE(_predList, _goldList);}
+    public double getRMSE() {return StatisticalUtil.computeRMSE(_predList, _goldList);}
 
     public void printConfusionMatrix()
     {
@@ -165,7 +165,7 @@ public class ScoreDict<K>
             matrix.add(row);
         }
 
-        System.out.println(StringUtil.toTableStr(matrix));
+        System.out.println(StringUtil.toTableStr(matrix, true));
         System.out.println("Table total: " + columnTotals.getSum());
     }
 
