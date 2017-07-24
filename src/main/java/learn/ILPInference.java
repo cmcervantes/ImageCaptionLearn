@@ -35,6 +35,7 @@ public class ILPInference
     private Set<String> _failedImgs, _fallbackImgs;
     private String _graphRoot;
     private DoubleDict<String> _groundingAccuracies, _relationAccuracies;
+    private int _maxRelationLabel;
 
     /**Creates a new ILPInference module, using the specified
      * docSet and nonvisual scores file; Performs combined inference
@@ -86,6 +87,9 @@ public class ILPInference
         if(typeCostsFile != null)
             _typeCosts = ClassifyUtil.readMccScoresFile(typeCostsFile);
 
+        //the default max label is 3
+        _maxRelationLabel = 3;
+
         //Store our visual mentions in accordance
         //with our nonvis scheme
         _visualMentionDict = new HashMap<>();
@@ -108,11 +112,22 @@ public class ILPInference
         if(_type != InferenceType.RELATION){
             for(Document d : _docDict.values()){
                 List<BoundingBox> boxes = new ArrayList<>(d.getBoundingBoxSet());
-                if(!boxes.isEmpty())
-                    _boxDict.put(d.getID(), boxes);
+                if(boxes.isEmpty())
+                    Logger.log("WARNING: Image " + d.getID() + " has no boxes");
+                _boxDict.put(d.getID(), boxes);
             }
         }
     }
+
+    /**Sets each thread's max relation label, according to
+     * 0: null
+     * 1: coref
+     * 2: subset
+     * 3: superset
+     *
+     * @param maxRelationLabel
+     */
+    public void setMaxRelationLabel(int maxRelationLabel){_maxRelationLabel = maxRelationLabel;}
 
     /* File loading methods */
 
@@ -207,6 +222,11 @@ public class ILPInference
         if(f_grnd.exists())
             _groundingGraphs = (Map<String, Map<String, Integer>>)
                     FileIO.readObject(Map.class, filename_grounding);
+
+        if(_relationGraphs == null)
+            _relationGraphs = new HashMap<>();
+        if(_groundingGraphs == null)
+            _groundingGraphs = new HashMap<>();
 
         Logger.log("Loaded %d relation graphs; %d grounding graphs",
                    _relationGraphs.size(), _groundingGraphs.size());
@@ -1213,13 +1233,15 @@ public class ILPInference
     {
         switch(_type){
             case RELATION: return new ILPSolverThread(_visualMentionDict.get(docID),
-                    _relationScores, _typeCosts, fixedLinks, constrainTypes, numSolverThreads);
+                    _relationScores, _typeCosts, fixedLinks, constrainTypes, _maxRelationLabel,
+                    numSolverThreads);
             case GROUNDING:
                 return new ILPSolverThread(_visualMentionDict.get(docID),
-                    _boxDict.get(docID), _affinityScores, _cardinalityScores, numSolverThreads);
+                    _boxDict.get(docID), _affinityScores, _cardinalityScores, false, numSolverThreads);
             case JOINT: return new ILPSolverThread(_visualMentionDict.get(docID),
                     _boxDict.get(docID), _relationScores, _typeCosts, _affinityScores,
-                    _cardinalityScores, fixedLinks, constrainTypes, numSolverThreads);
+                    _cardinalityScores, fixedLinks, constrainTypes, _maxRelationLabel, false,
+                    numSolverThreads);
         }
         return null;
     }

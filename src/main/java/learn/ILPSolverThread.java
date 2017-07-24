@@ -34,6 +34,9 @@ public class ILPSolverThread extends Thread {
     private boolean _foundSolution;
     private int _solverThreads;
     private boolean _fallbackSolution;
+    private int _maxRelationLabel;
+    private boolean _excludeBoxExigence;
+    private boolean _constrainTypes;
 
     /**
      * Constructs a new ILPSolverThread for use with Relation inference
@@ -45,11 +48,11 @@ public class ILPSolverThread extends Thread {
      */
     public ILPSolverThread(List<Mention> mentionList, Map<String, double[]> relationScores,
                            Map<String, double[]> typeCosts, Map<String, Integer> fixedLinks,
-                           boolean constrainTypes, int solverThreads)
+                           boolean constrainTypes, int maxRelationLabel, int solverThreads)
     {
         _init(ILPInference.InferenceType.RELATION, mentionList, null,
               relationScores, typeCosts, null, null, fixedLinks,
-              constrainTypes, solverThreads);
+              constrainTypes, maxRelationLabel, false, solverThreads);
     }
 
     /**
@@ -62,10 +65,11 @@ public class ILPSolverThread extends Thread {
      */
     public ILPSolverThread(List<Mention> mentionList, List<BoundingBox> boxList,
                            Map<String, double[]> affinityScores, Map<String, double[]> cardinalityScores,
-                           int solverThreads)
+                           boolean excludeBoxExigence, int solverThreads)
     {
         _init(ILPInference.InferenceType.GROUNDING, mentionList, boxList, null,
-              null, affinityScores, cardinalityScores, null, false, solverThreads);
+              null, affinityScores, cardinalityScores, null, false, -1,
+                excludeBoxExigence, solverThreads);
     }
 
     /**
@@ -82,11 +86,12 @@ public class ILPSolverThread extends Thread {
     public ILPSolverThread(List<Mention> mentionList, List<BoundingBox> boxList,
                            Map<String, double[]> relationScores, Map<String, double[]> typeCosts,
                            Map<String, double[]> affinityScores, Map<String, double[]> cardinalityScores,
-                           Map<String, Integer> fixedLinks, boolean constrainTypes, int solverThreads)
+                           Map<String, Integer> fixedLinks, boolean constrainTypes, int maxRelationLabel,
+                           boolean excludeBoxExigence, int solverThreads)
     {
         _init(ILPInference.InferenceType.JOINT, mentionList, boxList, relationScores,
                 typeCosts, affinityScores, cardinalityScores, fixedLinks, constrainTypes,
-                solverThreads);
+                maxRelationLabel, excludeBoxExigence, solverThreads);
     }
 
     /**
@@ -99,15 +104,20 @@ public class ILPSolverThread extends Thread {
      * @param cardinalityScores
      * @param fixedLinks
      * @param constrainTypes
+     * @param maxRelationLabel
+     * @param solverThreads
      */
     private void _init(ILPInference.InferenceType infType, List<Mention> mentionList,
                        List<BoundingBox> boxList, Map<String, double[]> relationScores,
                        Map<String, double[]> typeCosts, Map<String, double[]> affinityScores,
                        Map<String, double[]> cardinalityScores, Map<String, Integer> fixedLinks,
-                       boolean constrainTypes, int solverThreads)
+                       boolean constrainTypes, int maxRelationLabel, boolean excludeBoxExigence,
+                       int solverThreads)
     {
         _mentionList = mentionList; _boxList = boxList;
-        _type = infType;
+        _type = infType; _maxRelationLabel = maxRelationLabel;
+        _excludeBoxExigence = excludeBoxExigence;
+        _constrainTypes = constrainTypes;
         _docID = _mentionList.get(0).getDocID();
         _fixedLinks = new HashMap<>();
         if (fixedLinks != null) {
@@ -149,6 +159,8 @@ public class ILPSolverThread extends Thread {
         _solverThreads = solverThreads;
         _resetSolver();
     }
+
+    public void setMaxLabel(int maxLabel){_maxRelationLabel = maxLabel;}
 
     private void _resetSolver()
     {
@@ -228,7 +240,7 @@ public class ILPSolverThread extends Thread {
      * Sets up and runs the ILP solver for relation inference
      */
     private void run_relation() {
-        int[][][] relationIndices = new int[_mentionList.size()][_mentionList.size()][4];
+        int[][][] relationIndices = new int[_mentionList.size()][_mentionList.size()][_maxRelationLabel +1];
         for (int i = 0; i < _mentionList.size(); i++) {
             Mention m_i = _mentionList.get(i);
             for (int j = i + 1; j < _mentionList.size(); j++) {
@@ -237,7 +249,7 @@ public class ILPSolverThread extends Thread {
                 //Add boolean variables for each label, each direction
                 String id_ij = Document.getMentionPairStr(m_i, m_j);
                 String id_ji = Document.getMentionPairStr(m_j, m_i);
-                for (int y = 0; y < 4; y++) {
+                for (int y = 0; y <= _maxRelationLabel; y++) {
                     relationIndices[i][j][y] = _addRelationVariable(id_ij, y, 1.0);
                     relationIndices[j][i][y] = _addRelationVariable(id_ji, y, 1.0);
                 }
@@ -292,7 +304,7 @@ public class ILPSolverThread extends Thread {
      * Sets up and runs the ILP solver for combined inference
      */
     private void run_combined() {
-        int[][][] relationIndices = new int[_mentionList.size()][_mentionList.size()][4];
+        int[][][] relationIndices = new int[_mentionList.size()][_mentionList.size()][_maxRelationLabel +1];
         int[][] groundingIndices = new int[_mentionList.size()][_boxList.size()];
         int[][] antiGroundingIndices = new int[_mentionList.size()][_boxList.size()];
         int[][] cardinalityIndices = new int[_mentionList.size()][_boxList.size() + 1];
@@ -304,7 +316,7 @@ public class ILPSolverThread extends Thread {
                 //Add boolean variables for each label, each direction
                 String id_ij = Document.getMentionPairStr(m_i, m_j);
                 String id_ji = Document.getMentionPairStr(m_j, m_i);
-                for (int y = 0; y < 4; y++) {
+                for (int y = 0; y <= _maxRelationLabel; y++) {
                     relationIndices[i][j][y] = _addRelationVariable(id_ij, y,
                             2.0 / _mentionList.size());
                     relationIndices[j][i][y] = _addRelationVariable(id_ji, y,
@@ -538,21 +550,23 @@ public class ILPSolverThread extends Thread {
                     /* Subset Transitivity */
                     //If there exists an ij subset link, any subset link to/from k
                     //must hold for both i and j
-                    _solver.addLessThanConstraint(new int[]{linkIndices[i][j][2],
-                                    linkIndices[j][k][2], linkIndices[i][k][2]},
-                            new double[]{1.0, 1.0, -1.0}, 1.0);
-                    _solver.addLessThanConstraint(new int[]{linkIndices[j][i][2],
-                                    linkIndices[i][k][2], linkIndices[j][k][2]},
-                            new double[]{1.0, 1.0, -1.0}, 1.0);
-                    _solver.addLessThanConstraint(new int[]{linkIndices[i][j][2],
-                                    linkIndices[k][i][2], linkIndices[k][j][2]},
-                            new double[]{1.0, 1.0, -1.0}, 1.0);
-                    _solver.addLessThanConstraint(new int[]{linkIndices[j][i][2],
-                                    linkIndices[k][j][2], linkIndices[k][i][2]},
-                            new double[]{1.0, 1.0, -1.0}, 1.0);
+                    if(_maxRelationLabel >= 2){
+                        _solver.addLessThanConstraint(new int[]{linkIndices[i][j][2],
+                                        linkIndices[j][k][2], linkIndices[i][k][2]},
+                                new double[]{1.0, 1.0, -1.0}, 1.0);
+                        _solver.addLessThanConstraint(new int[]{linkIndices[j][i][2],
+                                        linkIndices[i][k][2], linkIndices[j][k][2]},
+                                new double[]{1.0, 1.0, -1.0}, 1.0);
+                        _solver.addLessThanConstraint(new int[]{linkIndices[i][j][2],
+                                        linkIndices[k][i][2], linkIndices[k][j][2]},
+                                new double[]{1.0, 1.0, -1.0}, 1.0);
+                        _solver.addLessThanConstraint(new int[]{linkIndices[j][i][2],
+                                        linkIndices[k][j][2], linkIndices[k][i][2]},
+                                new double[]{1.0, 1.0, -1.0}, 1.0);
+                    }
 
                     /* Entity Relation Consistency */
-                    for(int y=0; y<4; y++){
+                    for(int y = 0; y<= _maxRelationLabel; y++){
                         //If there exists an ij coref link, any link to/from k
                         //must hold for both i and j
                         _solver.addLessThanConstraint(new int[]{linkIndices[i][j][1],
@@ -624,10 +638,12 @@ public class ILPSolverThread extends Thread {
         //Enforce symmetry between coref / antisym between subset
         _solver.addEqualityConstraint(new int[]{linkIndices_ij[1],
                 linkIndices_ji[1]}, new double[]{1.0, -1.0}, 0.0);
-        _solver.addEqualityConstraint(new int[]{linkIndices_ij[2],
-                linkIndices_ji[3]}, new double[]{1.0, -1.0}, 0.0);
-        _solver.addEqualityConstraint(new int[]{linkIndices_ij[3],
-                linkIndices_ji[2]}, new double[]{1.0, -1.0}, 0.0);
+        if(_maxRelationLabel >= 3){
+            _solver.addEqualityConstraint(new int[]{linkIndices_ij[2],
+                    linkIndices_ji[3]}, new double[]{1.0, -1.0}, 0.0);
+            _solver.addEqualityConstraint(new int[]{linkIndices_ij[3],
+                    linkIndices_ji[2]}, new double[]{1.0, -1.0}, 0.0);
+        }
     }
 
     /**Adds the grounding box exigence constraint to the solver; boxes must be associated
@@ -707,7 +723,7 @@ public class ILPSolverThread extends Thread {
 
                 //get and store the ij link
                 Integer link_ij = null, link_ji = null;
-                for(int y=0; y<4; y++){
+                for(int y = 0; y<= _maxRelationLabel; y++){
                     if(_solver.getBooleanValue(linkIndices[i][j][y])){
                         if(link_ij != null)
                             System.out.printf("Found dual labels! %d | %d\n", link_ij, y);

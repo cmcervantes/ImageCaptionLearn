@@ -1,9 +1,6 @@
 package core;
 
-import learn.ClassifyUtil;
-import learn.ILPInference;
-import learn.Preprocess;
-import learn.WekaMulticlass;
+import learn.*;
 import nlptools.IllinoisAnnotator;
 import nlptools.StanfordAnnotator;
 import out.OutTable;
@@ -15,6 +12,8 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.*;
 
+import static core.DocumentLoader.getDocumentSet;
+
 /**The Overlord is responsible for
  * parsing args and calling other PanOpt
  * modules
@@ -25,7 +24,6 @@ public class Overlord
 {
     //Paths
     public static String dataPath = "/home/ccervan2/data/";
-    public static String lexPath = "/shared/projects/Flickr30k/lexicons/";
     public static String captionTePath = "/shared/projects/caption_te/";
     public static String wordnetDir = "/shared/data/WordNet-3.0/dict/";
     public static String word2vecPath = "/shared/projects/word2vec/word2vec.vector.gz";
@@ -39,11 +37,13 @@ public class Overlord
     public static String flickr30k_sqlite = flickr30kPath + "Flickr30kEntities_v2.db";
     public static String flickr30k_sqlite_legacy = flickr30kPath_legacy + "Flickr30kEntities_v1.db";
     public static String flickr30kResources = flickr30kPath + "resources/";
+    public static String flickr30k_lexicon = "/shared/projects/Flickr30k/lexicons/";
     public static String mscocoPath = "/shared/projects/MSCOCO/";
     public static String[] mscoco_mysqlParams =
             {"ccervan2.web.engr.illinois.edu", "ccervan2_root", "thenIdefyheaven!", "ccervan2_coco"};
     public static String mscoco_sqlite = mscocoPath + "MSCOCO.db"; //old: 5/31; new: 6/14
     public static String mscocoResources = mscocoPath + "resources/";
+    public static String mscoco_lexicon = mscocoResources + "coco_lex.csv";
     public static String snliPath = "/shared/projects/SNLI/";
 
 	private static String _outroot;
@@ -150,6 +150,10 @@ public class Overlord
         parser.setArgument_opts("--inf_type", new String[]{"relation", "grounding", "joint"},
                 "relation", "Specified which inference module to use", "Infer");
         parser.setArgument_flag("--type_constraint", "Enables the inference type constraint", "Infer");
+        parser.setArgument_flag("--exclude_subset", "Whether to exclude the subset label "+
+                "during relation / joint inference", "Infer");
+        parser.setArgument_flag("--exclude_box_exigence", "Whether to exclude the box exigence "+
+                "constraint during grounding / joint inference", "Infer");
         parser.setArgument_flag("--export_files", "Writes examples to out/coref/htm/ and conll "+
                 "files to out/coref/conll/", "Infer");
         parser.setArgument("--graph_root", "Loads previous inference "+
@@ -200,7 +204,7 @@ public class Overlord
             }
 
             //get the documents
-            docSet = DocumentLoader.getDocumentSet(conn, crossValFlag, reviewedOnly, numRandImgs);
+            docSet = getDocumentSet(conn, crossValFlag, reviewedOnly, numRandImgs);
         }
 
         //Switch on the specified module, and parse module args
@@ -214,7 +218,166 @@ public class Overlord
                 Minion.export_modSubsetFeats(docSet, split);
             } else {
 
-                Mention.initializeLexicons(Overlord.lexPath, null);
+                for(Document d : docSet)
+                    if(d.getBoundingBoxSet().isEmpty())
+                        System.out.println(d.getID());
+
+
+
+                //ClassifyUtil.evaluateAffinity_coco(docSet, Overlord.dataPath +
+                //        "tacl201708/scores/mscoco_dev_30k_affinity.scores",
+                //        Overlord.dataPath + "tacl201708/scores/mscoco_dev_nonvis.scores", false);
+
+                //ClassifyUtil.evaluateNonvis(docSet, Overlord.dataPath + "tacl201708/scores/flickr30k_test_nonvis.scores");
+
+
+                /*
+                Preprocess.export_phraseLocalization_ccaLists(docSet, "dev", "flickr30k",
+                        Overlord.dataPath + "tacl201708/cca/mscoco_boxes/",
+                        Overlord.dataPath + "tacl201708/cca/mscoco_dev");*/
+
+
+                /*
+                Preprocess.export_phraseLocalization_convertBoxFeats(docSet,
+                        Overlord.dataPath + "tacl201708/cca/mscoco_dev_imData_feats.csv",
+                        Overlord.dataPath + "tacl201708/cca/mscoco_boxes/");*/
+
+
+                /**/
+
+                //ClassifyUtil.evaluateNonvis(docSet, Overlord.dataPath +
+                //        "tacl201708/scores/" + dataset + "_" + split + "_nonvis.scores");
+                //ClassifyUtil.exportStanfordCorefConll(docSet);
+                System.exit(0);
+
+
+                DoubleDict<Integer> nonvisLabelDict = new DoubleDict<>();
+                List<String> ll_feats = FileIO.readFile_lineList("/home/ccervan2/data/tacl201708/feats/coco30k_trainDev_nonvis.feats");
+                for(String fvStr : ll_feats){
+                    FeatureVector fv = FeatureVector.parseFeatureVector(fvStr);
+                    nonvisLabelDict.increment((int)fv.label);
+                }
+                System.out.print(nonvisLabelDict);
+                System.exit(0);
+
+
+
+
+                for(Document d : docSet){
+                    for(Caption c : d.getCaptionList()) {
+                        int chunkIdx_max = -1;
+                        for (Chunk ch : c.getChunkList())
+                            if (ch.getIdx() > chunkIdx_max)
+                                chunkIdx_max = ch.getIdx();
+                        if(chunkIdx_max >= c.getChunkList().size())
+                            System.out.println(c.getUniqueID());
+                    }
+                }
+                System.exit(0);
+
+                List<String> allowedConjList =
+                        Arrays.asList(",", "and", ", and", "on and");
+
+                Map<String, Set<Caption>> partOfDict = new HashMap<>();
+                partOfDict.put("xofy", new HashSet<>());
+                partOfDict.put("agent_list", new HashSet<>());
+                partOfDict.put("bodypart_list", new HashSet<>());
+                partOfDict.put("clothing_list", new HashSet<>());
+                partOfDict.put("no_list", new HashSet<>());
+                for(Document d : docSet){
+                    for(Caption c : d.getCaptionList()){
+                        List<Mention> agents = new ArrayList<>();
+                        List<Mention> bodyparts = new ArrayList<>();
+                        List<Mention> clothing = new ArrayList<>();
+
+                        for(int i=0; i<c.getMentionList().size(); i++){
+                            Mention m = c.getMentionList().get(i);
+
+                            switch(m.getLexicalType()){
+                                case "people":
+                                case "animals": agents.add(m);
+                                    break;
+                                case "bodyparts": bodyparts.add(m);
+                                    break;
+                                case "clothing":
+                                case "colors":
+                                case "clothing/colors": clothing.add(m);
+                                    break;
+                                default:
+                                    if(m.getPronounType().isAnimate())
+                                        agents.add(m);
+                            }
+                        }
+
+                        if(agents.isEmpty() || (bodyparts.isEmpty() && clothing.isEmpty()))
+                            continue;
+
+                        for(int i=1; i<c.getMentionList().size(); i++){
+                            Mention m = c.getMentionList().get(i);
+                            Mention m_j = c.getMentionList().get(i-1);
+                            List<Token> interstitialTokens = c.getInterstitialTokens(m_j, m);
+                            if(!agents.isEmpty() && agents.get(agents.size()-1).equals(m) &&
+                                    interstitialTokens.size() == 1 && interstitialTokens.get(0).toString().equals("of")){
+                                if(!bodyparts.isEmpty() && bodyparts.get(bodyparts.size()-1).equals(m_j))
+                                    partOfDict.get("xofy").add(c);
+                                if(!clothing.isEmpty() && clothing.get(clothing.size()-1).equals(m_j))
+                                    partOfDict.get("xofy").add(c);
+                            }
+                        }
+
+                        for(int i=1; i<agents.size(); i++){
+                            Mention m = agents.get(i);
+                            Mention m_j = agents.get(i-1);
+                            List<Token> interstitialTokens = c.getInterstitialTokens(m_j, m);
+                            String interStr = StringUtil.listToString(interstitialTokens, " ").toLowerCase().trim();
+                            if(allowedConjList.contains(interStr))
+                                partOfDict.get("agent_list").add(c);
+                        }
+                        for(int i=1; i<bodyparts.size(); i++){
+                            Mention m = bodyparts.get(i);
+                            Mention m_j = bodyparts.get(i-1);
+                            List<Token> interstitialTokens = c.getInterstitialTokens(m_j, m);
+                            String interStr = StringUtil.listToString(interstitialTokens, " ").toLowerCase().trim();
+                            if(allowedConjList.contains(interStr))
+                                partOfDict.get("bodypart_list").add(c);
+                        }
+                        for(int i=1; i<clothing.size(); i++){
+                            Mention m = clothing.get(i);
+                            Mention m_j = clothing.get(i-1);
+                            List<Token> interstitialTokens = c.getInterstitialTokens(m_j, m);
+                            String interStr = StringUtil.listToString(interstitialTokens, " ").toLowerCase().trim();
+                            if(allowedConjList.contains(interStr))
+                                partOfDict.get("clothing_list").add(c);
+                        }
+
+                        boolean addedCap = false;
+                        for(String caseStr : partOfDict.keySet()){
+                            addedCap |= partOfDict.get(caseStr).contains(c);
+                        }
+                        if(!addedCap)
+                            partOfDict.get("no_list").add(c);
+                    }
+                }
+
+
+                for(String caseStr : partOfDict.keySet()){
+                    System.out.println(caseStr + ": " + partOfDict.get(caseStr).size());
+                    List<String> captions = new ArrayList<>();
+                    for(Caption c : partOfDict.get(caseStr))
+                        captions.add(c.getUniqueID() + "\t" + c.toString());
+                    FileIO.writeFile(captions, "ex_" + caseStr + "_captions", "txt", true);
+                }
+
+
+                /*
+                Preprocess.export_phraseLocalization_ccaLists(docSet, "trainAsDev",
+                        "flickr30k", "/home/ccervan2/data/tacl201708/mscoco_boxes/",
+                        "/home/ccervan2/data/tacl201708/mscoco_trainAsDev");*/
+                System.exit(0);
+
+
+
+                Mention.initializeLexicons(Overlord.flickr30k_lexicon, null);
                 Caption.initLemmatizer();
                 Cardinality.initCardLists(Overlord.flickr30kResources + "collectiveNouns.txt");
                 DocumentLoader.exportCOCOFiles(docSet, "/shared/projects/Flickr30kEntities_v2/flickr30kEntities_v2");
@@ -238,7 +401,7 @@ public class Overlord
                 System.out.println("WHERE img_id IN (" + StringUtil.listToString(ll_biff, ", ") + ")");
                 System.exit(0);
 
-                Mention.initializeLexicons(Overlord.lexPath, Overlord.mscocoResources + "coco_lex.csv");
+                Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscocoResources + "coco_lex.csv");
                 int numMentions = 0;
                 int numNonvis = 0;
                 int numNobox = 0;
@@ -628,7 +791,7 @@ public class Overlord
                 System.exit(0);
 
 /*
-                Mention.initializeLexicons(Overlord.lexPath, null);
+                Mention.initializeLexicons(Overlord.flickr30k_lexicon, null);
                 Caption.initLemmatizer();
                 Cardinality.initCardLists(Overlord.flickr30kResources + "collectiveNouns.txt");
                 DBConnector conn = new DBConnector(mscoco_mysqlParams[0], mscoco_mysqlParams[1],
@@ -677,7 +840,7 @@ public class Overlord
                 //Minion.importCocoData(Overlord.mscocoPath + "coco_caps_20170531.coref");
                 //System.exit(0);
 /*
-                Mention.initializeLexicons(Overlord.lexPath, null);
+                Mention.initializeLexicons(Overlord.flickr30k_lexicon, null);
                 Caption.initLemmatizer();
                 Cardinality.initCardLists(Overlord.flickr30kResources +
                         "collectiveNouns.txt");
@@ -772,7 +935,7 @@ public class Overlord
                 System.exit(0);
 
 
-                Mention.initializeLexicons(Overlord.lexPath, Overlord.mscocoResources + "coco_lex.csv");
+                Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscocoResources + "coco_lex.csv");
                 Set<String> supercategories = Mention.getCOCOSupercategories();
                 Set<String> categories = Mention.getCOCOCategories();
 
@@ -879,7 +1042,7 @@ public class Overlord
                 FileIO.writeFile(cocoLines_new, "coco_caps", "token", false);
                 System.exit(0);*/
 
-                //Mention.initLexiconDict(Overlord.lexPath);
+                //Mention.initLexiconDict(Overlord.flickr30k_lexicon);
                 /*
                 Caption.initLemmatizer();
                 Cardinality.initCardLists(Overlord.flickr30kResources + "collectiveNouns.txt");
@@ -1005,7 +1168,7 @@ public class Overlord
 
                 //Minion.export_bryanPreproc_coco(docSet);
                 //System.exit(0);
-                Mention.initializeLexicons(lexPath, null);
+                Mention.initializeLexicons(flickr30k_lexicon, null);
                 List<String> ll_snli = FileIO.readFile_lineList(Overlord.snliPath +
                         "snli_1.0_train.jsonl");
                 IllinoisAnnotator annotator =
@@ -1115,7 +1278,7 @@ public class Overlord
                 /*
                 Collection<Document> docSet_coco =
                         DocumentLoader.getDocumentSet(Overlord.dataPath + "mscoco/coco_train_sub_20170331.coref",
-                                Overlord.lexPath, Overlord.flickr30kResources);
+                                Overlord.flickr30k_lexicon, Overlord.flickr30kResources);
                 double mentionCount = 0.0;
                 for(Document d : docSet_coco)
                     mentionCount += d.getMentionList().size();
@@ -1303,10 +1466,15 @@ public class Overlord
                     break;
             }
 
+
             if(relInf == null){
                 Logger.log(new Exception("Could not create relation inference module"));
                 System.exit(1);
             }
+
+            //Set the max label to 1 if we're excluding subsets
+            if(parser.getBoolean("exclude_subset"))
+                relInf.setMaxRelationLabel(1);
 
             //Do inference
             relInf.infer(numThreads, parser.getBoolean("type_constraint"));

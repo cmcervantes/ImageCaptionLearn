@@ -932,6 +932,88 @@ public class Minion
     }
 
 
+    public static void printGroundingStats(Collection<Document> docSet, String dataset)
+    {
+        Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
+        DoubleDict<String> boxStats = new DoubleDict<>();
+        Set<String> newCatEntries = new HashSet<>();
+        DoubleDict<String> noboxCatDistro = new DoubleDict<>();
+        for(Document d : docSet){
+            if(dataset.equals("flickr30k")){
+                for(Mention m : d.getMentionList()){
+                    if(m.getPronounType() != Mention.PRONOUN_TYPE.NONE)
+                        continue;
+
+                    if(!m.getChainID().equals("0")){
+                        Set<BoundingBox> boxSet = d.getBoxSetForMention(m);
+                        if(boxSet.isEmpty())
+                            boxStats.increment("vis_nobox");
+                        boxStats.increment("vis");
+                    } else {
+                        boxStats.increment("nonvis");
+                    }
+                }
+            } else if(dataset.equals("mscoco")){
+                for(Mention m : d.getMentionList()){
+                    if(m.getPronounType() != Mention.PRONOUN_TYPE.NONE)
+                        continue;
+                    if(!m.getChainID().equals("0")){
+                        if(Mention.getLexicalEntry_cocoCategory(m, false) == null){
+                            boxStats.increment("vis_nocat");
+                            Set<BoundingBox> boxSet = d.getBoxSetForMention(m);
+                            for(BoundingBox b : boxSet)
+                                newCatEntries.add(b.getCategory() + " -> " + m.getHead().getLemma().toLowerCase());
+                        } else {
+                            Set<BoundingBox> boxSet = d.getBoxSetForMention(m);
+                            if(boxSet.isEmpty()) {
+                                boxStats.increment("vis_cat_nobox");
+                                for(String catPart : Mention.getLexicalEntry_cocoCategory(m, true).split("/"))
+                                    noboxCatDistro.increment(Mention.getSuperCategory(catPart));
+                            } else {
+                                boxStats.increment("vis_cat_box");
+                            }
+                            boxStats.increment("vis_cat");
+                        }
+                    } else {
+                        boxStats.increment("nonvis");
+                    }
+                }
+            }
+        }
+
+        if(dataset.equals("flickr30k")){
+            double totalMentions = boxStats.get("vis") + boxStats.get("nonvis");
+            System.out.printf("Visual: %d (%.2f%%); Nonvisual: %d (%.2f%%)\n",
+                    (int)boxStats.get("vis"), 100.0 * boxStats.get("vis") / totalMentions,
+                    (int)boxStats.get("nonvis"), 100.0 * boxStats.get("nonvis") /
+                            totalMentions);
+            System.out.printf("Visual Nobox: %d (%.2f%% of vis)\n",
+                    (int)boxStats.get("vis_nobox"), 100.0 * boxStats.get("vis_nobox") /
+                            boxStats.get("vis"));
+        } else if(dataset.equals("mscoco")){
+            for(String s : newCatEntries)
+                System.out.println(s);
+
+            double totalCatNobox = noboxCatDistro.getSum();
+            noboxCatDistro.keySet().forEach(cat -> noboxCatDistro.divide(cat, totalCatNobox));
+            Logger.log("Supercategory distro");
+            System.out.print(noboxCatDistro);
+            double visTotal = boxStats.get("vis_nocat") + boxStats.get("vis_cat");
+            double total = visTotal + boxStats.get("nonvis");
+            System.out.printf("Visual: %d (%.2f%%); Nonvisual: %d (%.2f%%)\n",
+                    (int)visTotal,
+                    100.0 * visTotal / total,
+                    (int)boxStats.get("nonvis"), 100.0 * boxStats.get("nonvis") /
+                            total);
+            System.out.printf("Visual Nocat: %d (%.2f%% of vis); "+
+                            "Visual Cat Nobox: %d (%.2f%% of vis); "+
+                            "Visual Cat Box: %d (%.2f%% of vis)\n",
+                    (int)boxStats.get("vis_nocat"), 100.0 * boxStats.get("vis_nocat") /
+                            visTotal, (int)boxStats.get("vis_cat_nobox"), 100.0 *
+                            boxStats.get("vis_cat_nobox") / visTotal, (int)boxStats.get("vis_cat_box"),
+                    100.0 * boxStats.get("vis_cat_box") / visTotal);
+        }
+    }
 
 
 
@@ -1083,7 +1165,7 @@ public class Minion
 
     public static void export_cocoCategoryStats_givenBox(Collection<Document> docSet)
     {
-        Mention.initializeLexicons(Overlord.lexPath, Overlord.mscocoResources + "coco_lex.csv");
+        Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscocoResources + "coco_lex.csv");
         Set<String> supercategories = Mention.getCOCOSupercategories();
         Set<String> categories = Mention.getCOCOCategories();
 
@@ -1265,7 +1347,7 @@ public class Minion
 
     public static void export_cocoCategoryStats_givenMention(Collection<Document> docSet)
     {
-        Mention.initializeLexicons(Overlord.lexPath, Overlord.mscocoResources + "coco_lex.csv");
+        Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscocoResources + "coco_lex.csv");
         Set<String> supercategories = Mention.getCOCOSupercategories();
         Set<String> categories = Mention.getCOCOCategories();
 
@@ -1385,7 +1467,7 @@ public class Minion
      */
     public static void export_cocoCategoryStats_coverage(Collection<Document> docSet)
     {
-        Mention.initializeLexicons(Overlord.lexPath, Overlord.mscocoResources + "coco_lex.csv");
+        Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscocoResources + "coco_lex.csv");
         Set<String> categories = Mention.getCOCOCategories();
 
         Set<String> nonvisHeads = new HashSet<>();

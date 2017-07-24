@@ -161,6 +161,9 @@ public class Preprocess
                                                           String lexicalTypes, String boxFeatureDir,
                                                           String outRoot)
     {
+        //Initialize the lexicons
+        Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
+
         //Read bounding box filenames from the box feature dir to double check
         //the files will be there when we expect them
         Set<String> boxFiles = new HashSet<>();
@@ -204,6 +207,7 @@ public class Preprocess
         List<String> ll_img = new ArrayList<>(), ll_txt = new ArrayList<>();
         List<String> ll_ids = new ArrayList<>(), ll_labels = new ArrayList<>();
         List<String> ll_types = new ArrayList<>();
+        DoubleDict<Integer> labelDistro = new DoubleDict<>();
         if(dataSplit.equals("train")){
             //Randomly sample 10 bounding boxes from those that have boxes
             Map<String, Set<BoundingBox>> mentionBoxesDict_sample =
@@ -283,12 +287,15 @@ public class Preprocess
 
                     //Add this mention's type, for CCA training purposes
                     String mentionCat = "";
-                    if(lexicalTypes.equals("flickr30k"))
+                    if(lexicalTypes.equals("flickr30k")) {
                         mentionCat = m.getLexicalType();
-                    else if(lexicalTypes.equals("mscoco_category"))
+                        if(mentionCat.equals("other"))
+                            mentionCat = Mention.getLexicalEntry_flickr(m);
+                    } else if(lexicalTypes.equals("mscoco_category"))
                         mentionCat = Mention.getLexicalEntry_cocoCategory(m, true);
                     else if(lexicalTypes.equals("mscoco_supercategory"))
                         mentionCat = Mention.getSuperCategory(Mention.getLexicalEntry_cocoCategory(m, true));
+
                     ll_types.add(m.getUniqueID() + "," + mentionCat);
 
                     //Iterate through the box pairings
@@ -299,6 +306,7 @@ public class Preprocess
                         ll_ids.add(m.getUniqueID() + "|" + b.getUniqueID());
                         int label = assocBoxes.contains(b) ? 1 : 0;
                         ll_labels.add(String.valueOf(label));
+                        labelDistro.increment(label);
                     }
                 }
                 docIdx++;
@@ -314,8 +322,143 @@ public class Preprocess
             FileIO.writeFile(ll_labels, outRoot + "_label", "txt", false);
             FileIO.writeFile(ll_types, outRoot + "_type", "csv", false);
         }
+
+        //As a sanity check, print the label distribution
+        Logger.log("Done; Label Distro:");
+        System.out.print(labelDistro.toString());
     }
 
+    /**Exports phrase localization CCA lists for full MSCOCO training, which assumes
+     * every same-category box/mention are ground together (if no true grounding
+     * is available) and subsamples the mention/box pairs
+     *
+     * @param docSet            Documents from which to generate lists
+     * @param lexicalTypes      The type of lexical types to use
+     *                          (flickr30k/mscoco_category/mscoco_supercategory)
+     * @param boxFeatureDir     Directory containing bounding box features
+     *                          (one image's boxes per file)
+     * @param outRoot           Root path to which the lists will be written
+     *                          (in the form &lt;outRoot&gt;_box_&lt;dataSplit&gt;.csv
+     *                          and similar)
+     */
+    public static void export_phraseLocalization_ccaLists(Collection<Document> docSet,
+                                                          String boxFeatureDir, String outRoot)
+    {
+        //Initialize the lexicons
+        Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
+
+        //Read bounding box filenames from the box feature dir to double check
+        //the files will be there when we expect them
+        Set<String> boxFiles = new HashSet<>();
+        File boxDir = new File(boxFeatureDir);
+        for(File f : boxDir.listFiles())
+            if(f.isFile())
+                boxFiles.add(f.getName().replace(".feats", ""));
+
+        //Read stop words
+        Set<String> stopWords =
+                new HashSet<>(FileIO.readFile_lineList(Overlord.flickr30kResources +
+                        "stop_words.txt"));
+
+        //Store a mapping of [docID -> [mention -> [bounding boxes] ] ]
+        Map<String, Map<Mention, Set<BoundingBox>>>
+                mentionBoxesDict = new HashMap<>();
+        for(Document d : docSet){
+            if(boxFiles.contains(d.getID().replace(".jpg", ""))){
+                for(Mention m : d.getMentionList()){
+                    //Get this mention's string, removing stop words
+                    StringBuilder normBuilder = new StringBuilder();
+                    for(Token t : m.getTokenList()){
+                        String normTok = t.toString().toLowerCase();
+                        if(!stopWords.contains(normTok)){
+                            normBuilder.append(normTok);
+                            normBuilder.append(" ");
+                        }
+                    }
+                    String normText = normBuilder.toString().trim();
+
+                    if(!mentionBoxesDict.containsKey(normText))
+                        mentionBoxesDict.put(normText, new HashMap<>());
+
+                    //If this is a reviewed image, grab the mention's boxes; otherwise
+                    //assume every same-category box is grounded to it
+                    Set<BoundingBox> assocBoxes = new HashSet<>();
+                    if(d.reviewed) {
+                        assocBoxes.addAll(d.getBoxSetForMention(m));
+                    } else {
+                        String mentionCats = Mention.getLexicalEntry_cocoCategory(m, true);
+                        if(mentionCats != null)
+                            for(BoundingBox b : d.getBoundingBoxSet())
+                                if(mentionCats.contains(b.getCategory()))
+                                    assocBoxes.add(b);
+                    }
+                    mentionBoxesDict.get(normText).put(m, assocBoxes);
+                }
+            } else {
+                System.out.println("ERROR: found no box feats for " + d.getID());
+            }
+        }
+
+        //store the in-order lists of box feats and text strings
+        List<String> ll_img = new ArrayList<>(), ll_txt = new ArrayList<>();
+        DoubleDict<Integer> labelDistro = new DoubleDict<>();
+        //Randomly sample 10 bounding boxes from those that have boxes
+        Map<String, Set<BoundingBox>> mentionBoxesDict_sample =
+                new HashMap<>();
+        for(String normText : mentionBoxesDict.keySet()){
+            List<BoundingBox> boxList = new ArrayList<>();
+            for(Mention m : mentionBoxesDict.get(normText).keySet())
+                boxList.addAll(mentionBoxesDict.get(normText).get(m));
+            Collections.shuffle(boxList);
+            if(!boxList.isEmpty()) {
+                mentionBoxesDict_sample.put(normText,
+                        new HashSet<>(boxList.subList(0,
+                                Math.min(boxList.size() - 1, 10))));
+            }
+        }
+
+        //store the in-order lists of box feats and text feats
+        int text_idx = 0;
+        for(String normText : mentionBoxesDict_sample.keySet()) {
+            for(BoundingBox b : mentionBoxesDict_sample.get(normText)){
+                ll_txt.add(normText);
+
+                //Since we don't know which image a word's box will come from
+                //a-priori, open the doc's file at each box (less efficient, but necessary)
+                List<Double> imgFeats = null;
+                try{
+                    BufferedReader br = new BufferedReader(new InputStreamReader(
+                            new FileInputStream(boxFeatureDir +
+                                    b.getDocID().replace(".jpg", ".feats"))));
+                    String nextLine = br.readLine();
+                    while(nextLine != null && imgFeats == null){
+                        String fvID = nextLine.split(" # ")[1];
+                        if(fvID.equals(b.getUniqueID())){
+                            FeatureVector fv = FeatureVector.parseFeatureVector(nextLine);
+                            imgFeats = new ArrayList<>();
+                            for(int i=1; i<=4096; i++)
+                                imgFeats.add(fv.getFeatureValue(i));
+                        }
+                        nextLine = br.readLine();
+                    }
+                    br.close();
+                } catch(Exception ex) {Logger.log(ex);}
+
+                //add the features to the img file
+                ll_img.add(StringUtil.listToString(imgFeats, ","));
+            }
+            text_idx++;
+            Logger.logStatus("Completed %.2f%%", 100.0 * text_idx / mentionBoxesDict_sample.size());
+        }
+
+        //Save the files (train, being subsampled, has no id/label/type files
+        FileIO.writeFile(ll_img, outRoot + "_box", "csv", false);
+        FileIO.writeFile(ll_txt, outRoot + "_phrase", "txt", false);
+
+        //As a sanity check, print the label distribution
+        Logger.log("Done; Label Distro:");
+        System.out.print(labelDistro.toString());
+    }
 
 
     /***** Histogram Functions (for later use as one-hot vectors) ****/
@@ -590,7 +733,7 @@ public class Preprocess
         Logger.log("Loading documents from coref file");
         Collection<Document> docSet_coref = DocumentLoader.getDocumentSet(
                 corefFile,
-                Overlord.lexPath, Overlord.flickr30kResources);
+                Overlord.flickr30k_lexicon, Overlord.flickr30kResources);
         Map<String, Document> docDict_coref = new HashMap<>();
         docSet_coref.forEach(d -> docDict_coref.put(d.getID(), d));
 
@@ -661,7 +804,7 @@ public class Preprocess
         }
 
         Logger.log("Initializing type lexicons");
-        Mention.initializeLexicons(Overlord.lexPath, null);
+        Mention.initializeLexicons(Overlord.flickr30k_lexicon, null);
 
         Logger.log("Predicting pos tags and chunks");
         IllinoisAnnotator annotator = IllinoisAnnotator.createChunker(posDir, chunkDir);
@@ -924,7 +1067,7 @@ public class Preprocess
      */
     public static void importCocoData_fromCoref(String corefFile, DBConnector conn)
     {
-        Mention.initializeLexicons(Overlord.lexPath, null);
+        Mention.initializeLexicons(Overlord.flickr30k_lexicon, null);
         Caption.initLemmatizer();
         Cardinality.initCardLists(Overlord.flickr30kResources +
                 "collectiveNouns.txt");
@@ -973,7 +1116,7 @@ public class Preprocess
         Collection<Document> docSet =
                 DocumentLoader.getDocumentSet(corefFile,
                         Overlord.mscocoPath + "coco_bbox.csv", Overlord.mscocoPath + "coco_imgs.txt",
-                        Overlord.lexPath, Overlord.flickr30kResources);
+                        Overlord.flickr30k_lexicon, Overlord.flickr30kResources);
         try{
             DocumentLoader.populateDocumentDB(conn, docSet, 100000, 1);
         } catch(Exception ex){

@@ -1,8 +1,10 @@
 package learn;
 
 import core.Overlord;
+import nlptools.StanfordAnnotator;
 import nlptools.Word2VecUtil;
 import nlptools.WordnetUtil;
+import org.apache.commons.lang.ArrayUtils;
 import statistical.ScoreDict;
 import structures.*;
 import utilities.*;
@@ -178,9 +180,9 @@ public abstract class ClassifyUtil {
 
                     //it's possible to reach here and have an invalid chunk idx, and
                     //in these cases we want to keep that initial null assignment
-                    if (chunkIdx_left > -1)
+                    if (chunkIdx_left > -1 && chunkIdx_left < chunkList.size())
                         chunkNeighbors[0] = chunkList.get(chunkIdx_left);
-                    if (chunkIdx_right > -1)
+                    if (chunkIdx_right > -1 && chunkIdx_right < chunkList.size())
                         chunkNeighbors[1] = chunkList.get(chunkIdx_right);
 
                     _mentionChunkNeighborDict.put(m, chunkNeighbors);
@@ -212,8 +214,12 @@ public abstract class ClassifyUtil {
                 for(Mention m : c.getMentionList()){
                     List<Chunk> chunkList = m.getChunkList();
                     if(!m.getChunkList().isEmpty()){
-                        Chunk left = c.getLeftNeighbor(chunkList.get(0));
-                        Chunk right = c.getRightNeighbor(chunkList.get(chunkList.size()-1));
+                        Chunk left = null;
+                        Chunk right = null;
+                        if(!chunkList.isEmpty()){
+                            left = c.getLeftNeighbor(chunkList.get(0));
+                            right = c.getRightNeighbor(chunkList.get(chunkList.size()-1));
+                        }
                         if(left != null && left.getChunkType().equals("PP"))
                             _prepDict_left.put(m, left.toString().toLowerCase());
                         if(right != null && right.getChunkType().equals("PP"))
@@ -550,6 +556,177 @@ public abstract class ClassifyUtil {
             mccScores.put(linePars[0], scores);
         }
         return mccScores;
+    }
+
+    /**Evalutes the given nonvis scores (produced by a model) against
+     * a simple heuristic baseline
+     *
+     * @param docSet
+     * @param nonvisScoresFile
+     */
+    public static void evaluateNonvis(Collection<Document> docSet, String nonvisScoresFile)
+    {
+        String nonvisHistFile = Overlord.flickr30kResources + "hist_nonvisual.csv";
+        Logger.log("Loading frequent nonvisual head words from " + nonvisHistFile);
+        Set<String> freqNonvisHeads = _loadOnehotDict(nonvisHistFile, 10).keySet();
+
+        Logger.log("Loading predicted nonvisual score dict from " + nonvisScoresFile);
+        BinaryClassifierScoreDict nonvis_scoreDict =
+                new BinaryClassifierScoreDict(nonvisScoresFile);
+
+        Logger.log("Evaluating visual mention detection");
+        ScoreDict<Integer> scoreDict_heur = new ScoreDict<>();
+        ScoreDict<Integer> scoreDict_model = new ScoreDict<>();
+        for(Document d : docSet){
+            for(Mention m : d.getMentionList()){
+                int gold = m.getChainID().equals("0") ? 0 : 1;
+                int pred_model = nonvis_scoreDict.get(m) != null &&
+                        nonvis_scoreDict.get(m) < 0 ? 1 : 0;
+                int pred_heur = 1;
+                if(freqNonvisHeads.contains(m.getHead().toString().toLowerCase()))
+                    pred_heur = 0;
+                scoreDict_heur.increment(gold, pred_heur);
+                scoreDict_model.increment(gold, pred_model);
+            }
+        }
+        System.out.printf("%12s: %s (Acc: %.2f%%)\n", "Heuristic",
+                scoreDict_heur.getScore(1).toScoreString(), scoreDict_heur.getAccuracy());
+        System.out.printf("%12s: %s (Acc: %.2f%%)\n", "Model",
+                scoreDict_model.getScore(1).toScoreString(), scoreDict_model.getAccuracy());
+    }
+
+    /**Evalutes the given affinity scores (produced by a model) against
+     * a simple category-matching baseline; strictHeuristic specifies whether
+     * to use strict matches for the coco category baseline
+     *
+     * @param docSet
+     * @param affinityScoresFile
+     */
+    public static void evaluateAffinity_coco(Collection<Document> docSet,
+                                             String affinityScoresFile,
+                                             String nonvisScoresFile,
+                                             boolean strictHeuristic)
+    {
+        Logger.log("Initializing lexicons");
+        Mention.initializeLexicons(Overlord.flickr30k_lexicon,
+                Overlord.mscoco_lexicon);
+
+        Logger.log("Loading predicted affinity score dict from " + affinityScoresFile);
+        Map<String, double[]> affinityScores =
+                ClassifyUtil.readMccScoresFile(affinityScoresFile);
+        Map<String, Integer> affinityScoreDict = new HashMap<>();
+        affinityScores.forEach((k,v) ->
+            affinityScoreDict.put(k, Util.getMaxIdx(ArrayUtils.toObject(v))));
+
+        Logger.log("Loading predicted nonvis scores from " + nonvisScoresFile);
+        BinaryClassifierScoreDict nonvis_scoreDict =
+                new BinaryClassifierScoreDict(nonvisScoresFile);
+        Set<String> nonvisMentions = new HashSet<>();
+        for(Document d : docSet) {
+            for (Mention m : d.getMentionList()) {
+                if (nonvis_scoreDict.get(m) != null &&
+                        nonvis_scoreDict.get(m) >= 0) {
+                    nonvisMentions.add(m.getUniqueID());
+                }
+            }
+        }
+
+
+        Logger.log("Evaluating affinity prediction");
+        ScoreDict<Integer> scoreDict_heur = new ScoreDict<>();
+        ScoreDict<Integer> scoreDict_model = new ScoreDict<>();
+        DoubleDict<String> perfectDict = new DoubleDict<>();
+        for(Document d : docSet){
+            boolean incorrectMention_heur = false;
+            boolean incorrectMention_model = false;
+            List<Mention> mentions = d.getMentionList();
+            Set<BoundingBox> boxes = d.getBoundingBoxSet();
+            for(Mention m : mentions){
+                String mentionCats = Mention.getLexicalEntry_cocoCategory(m, !strictHeuristic);
+                Set<BoundingBox> assocBoxes = d.getBoxSetForMention(m);
+
+                boolean incorrectBox_heur = false;
+                boolean incorrectBox_model = false;
+                for(BoundingBox b : boxes){
+                    String id = m.getUniqueID() + "|" + b.getUniqueID();
+                    int gold = assocBoxes.contains(b) ? 1 : 0;
+                    int pred_model = 0, pred_heur = 0;
+                    if(!nonvisMentions.contains(m.getUniqueID())){
+                        if(affinityScoreDict.containsKey(id))
+                            pred_model = affinityScoreDict.get(id);
+                        if(mentionCats != null && mentionCats.contains(b.getCategory()))
+                            pred_heur = 1;
+                    }
+
+                    incorrectBox_heur |= gold != pred_heur;
+                    incorrectBox_model |= gold != pred_model;
+
+                    scoreDict_heur.increment(gold, pred_heur);
+                    scoreDict_model.increment(gold, pred_model);
+                }
+                if(!incorrectBox_heur)
+                    perfectDict.increment("mentions_heur");
+                if(!incorrectBox_model)
+                    perfectDict.increment("mentions_model");
+                incorrectMention_heur |= incorrectBox_heur;
+                incorrectMention_model |= incorrectBox_model;
+                perfectDict.increment("mentions");
+            }
+            if(!incorrectMention_heur)
+                perfectDict.increment("imgs_heur");
+            if(!incorrectMention_model)
+                perfectDict.increment("imgs_model");
+            perfectDict.increment("imgs");
+        }
+        System.out.printf("%12s: %s (Acc: %.2f%%)\n", "Heuristic",
+                scoreDict_heur.getScore(1).toScoreString(), scoreDict_heur.getAccuracy());
+        System.out.printf("Perfect imgs: %d (%.2f%%); mentions: %d (%.2f%%)\n",
+                (int)perfectDict.get("imgs_heur"), 100.0 * perfectDict.get("imgs_heur") /
+                perfectDict.get("imgs"), (int)perfectDict.get("mentions_heur"),
+                100.0 * perfectDict.get("mentions_heur") / perfectDict.get("mentions"));
+        System.out.printf("%12s: %s (Acc: %.2f%%)\n", "Model",
+                scoreDict_model.getScore(1).toScoreString(), scoreDict_model.getAccuracy());
+        System.out.printf("Perfect imgs: %d (%.2f%%); mentions: %d (%.2f%%)\n",
+                (int)perfectDict.get("imgs_model"), 100.0 * perfectDict.get("imgs_model") /
+                        perfectDict.get("imgs"), (int)perfectDict.get("mentions_model"),
+                100.0 * perfectDict.get("mentions_model") / perfectDict.get("mentions"));
+    }
+
+    public static void exportStanfordCorefConll(Collection<Document> docSet)
+    {
+        Logger.log("Initializing Stanford Annotation object");
+        StanfordAnnotator stanfordAnno = StanfordAnnotator.createCoreference(false);
+
+        Logger.log("Processing documents; writing .conll files to out/stanford/");
+        int docIdx = 0;
+        for(Document d : docSet){
+            docIdx++;
+            Logger.logStatus("Processed %d (%.2f%% docs)", docIdx,
+                    100.0 * docIdx / docSet.size());
+
+            //predict the document as a stanford-parsed object
+            String text = "";
+            for(Caption c : d.getCaptionList())
+                text += c.toString() + " ";
+            text = text.trim();
+            Document d_stanford = stanfordAnno.annotate(d.getID(), text);
+
+            String outDir = "out/stanford/";
+
+            //Write the key file
+            List<String> lineList_key = d.toConll2012();
+            lineList_key.add(0, "#begin document (" + d.getID() + "); part 000");
+            lineList_key.add("#end document");
+            FileIO.writeFile(lineList_key, outDir +
+                    d.getID().replace(".jpg", "") + "_key", "conll", false);
+
+            //Write the response file
+            List<String> lineList_resp = d_stanford.toConll2012();
+            lineList_resp.add(0, "#begin document (" + d.getID() + "); part 000");
+            lineList_resp.add("#end document");
+            FileIO.writeFile(lineList_resp, outDir +
+                    d.getID().replace(".jpg", "") + "_response", "conll", false);
+        }
     }
 
     /**Exports the box-mention affinity features into a single file;
