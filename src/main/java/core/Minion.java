@@ -931,7 +931,6 @@ public class Minion
         System.out.println(StringUtil.toTableStr(table, true));
     }
 
-
     public static void printGroundingStats(Collection<Document> docSet, String dataset)
     {
         Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
@@ -1014,8 +1013,6 @@ public class Minion
                     100.0 * boxStats.get("vis_cat_box") / visTotal);
         }
     }
-
-
 
     public static void export_bryanPreproc_coco(Collection<Document> docSet)
     {

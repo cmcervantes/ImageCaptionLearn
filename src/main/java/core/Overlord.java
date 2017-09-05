@@ -55,9 +55,6 @@ public class Overlord
 	 */
 	public static void main(String[] args)
 	{
-        /*
-	    System.exit(0);*/
-
         //start our runtime clock
 		Logger.startClock();
 
@@ -103,13 +100,21 @@ public class Overlord
         parser.setArgument("--convert_to_arff",
                 "Converts the specified .feats file to .arff format",
                 "PATH", "Data");
-        String[] featOpts = {"relation", "affinity", "nonvis", "box_card"};
+        String[] featOpts = {"relation", "affinity", "nonvis", "card"};
         parser.setArgument_opts("--extractFeats", featOpts, null,
                 "Extracts features to --out", "Data");
         parser.setArgument_flag("--exclude_subset", "Whether to exclude the subset label "+
                 "during relation feature extraction", "Data");
         parser.setArgument_flag("--exclude_partof", "Whether to exclude the partOf label "+
                 "during relation feature extraction", "Data");
+        parser.setArgument_flag("--include_cardinality", "Whether to include the true "+
+                "cardinality (for train) or predicted cardinality distribution (for dev) "+
+                "when generating nonvis/relation features; intended for use with "+
+                "--cardinality_scores", "Data");
+        parser.setArgument("--cardinality_scores",
+                "Cardinality scores file; associates mention unique IDs with [0,1] "+
+                "(0-10,11+) cardinality prediction", String.class, null,
+                "FILE", false, "Data");
         String[] dbOpts = {"mysql", "sqlite"};
         parser.setArgument_opts("--buildDB", dbOpts, "mysql",
                 "Rebuilds the specified database in the default locations", "Data");
@@ -147,9 +152,10 @@ public class Overlord
                 "(0-10,11+) cardinality prediction", String.class,
                 "/home/ccervan2/source/data/feats/flickr30kEntities_v2_box_card_dev.scores",
                 "FILE", false, "Infer");
-        parser.setArgument_opts("--inf_type", new String[]{"relation", "grounding", "joint"},
+        parser.setArgument_opts("--inf_type", new String[]{"relation", "grounding", "joint",
+                                                           "joint_after_rel", "joint_after_grnd"},
                 "relation", "Specified which inference module to use", "Infer");
-        parser.setArgument_flag("--type_constraint", "Enables the inference type constraint", "Infer");
+        parser.setArgument_flag("--include_type_constraint", "Enables the inference type constraint", "Infer");
         parser.setArgument_flag("--exclude_subset", "Whether to exclude the subset label "+
                 "during relation / joint inference", "Infer");
         parser.setArgument_flag("--exclude_box_exigence", "Whether to exclude the box exigence "+
@@ -205,6 +211,16 @@ public class Overlord
 
             //get the documents
             docSet = getDocumentSet(conn, crossValFlag, reviewedOnly, numRandImgs);
+
+            if(dataset.equals("mscoco")){
+                Logger.log("WARNING: Adding Flickr30k Entities lexical types to COCO; fix this");
+                Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
+                for(Document d : docSet){
+                    for(Mention m : d.getMentionList()){
+                        m.setLexicalType(Mention.getLexicalEntry_flickr(m));
+                    }
+                }
+            }
         }
 
         //Switch on the specified module, and parse module args
@@ -217,12 +233,282 @@ public class Overlord
             } else if(parser.getBoolean("mod_subset")){
                 Minion.export_modSubsetFeats(docSet, split);
             } else {
+                Preprocess.export_neuralRelationFiles(docSet,
+                        Overlord.dataPath + "tacl201708/nn/" + dataset + "_" + split);
+                System.exit(0);
 
-                for(Document d : docSet)
-                    if(d.getBoundingBoxSet().isEmpty())
-                        System.out.println(d.getID());
+
+                Set<String> stopWords =
+                        new HashSet<>(FileIO.readFile_lineList(Overlord.flickr30kResources +
+                                "stop_words.txt"));
+                List<String> ll_normCaptions = new ArrayList<>();
+                List<String> ll_mentionIndices = new ArrayList<>();
+                for(Document d : docSet){
+                    for(Caption c : d.getCaptionList()){
+                        List<String> tokenList = new ArrayList<>();
+                        List<Integer> mentionIndices = new ArrayList<>();
+                        for(Token t : c.getTokenList()){
+                            String normText = t.toString().toLowerCase();
+                            if(StringUtil.hasAlphaNum(normText) &&
+                               !stopWords.contains(normText)){
+                                tokenList.add(normText);
+                                mentionIndices.add(t.mentionIdx);
+                            }
+                        }
+                        ll_normCaptions.add(c.getUniqueID() + "\t" +
+                            StringUtil.listToString(tokenList, " "));
+                        ll_mentionIndices.add(c.getUniqueID() + "\t" +
+                            StringUtil.listToString(mentionIndices, " "));
+                    }
+                }
+                FileIO.writeFile(ll_normCaptions, Overlord.dataPath +
+                        "tacl201708/nn/" + dataset + "_" + split + "_normCaps",
+                        "txt", false);
+                FileIO.writeFile(ll_mentionIndices, Overlord.dataPath +
+                        "tacl201708/nn/" + dataset + "_" + split + "_mentionIndices",
+                        "txt", false);
+
+                System.exit(0);
+
+/*
+                ClassifyUtil.evaluateAffinity_coco(docSet, Overlord.dataPath + "tacl201708/scores/" +
+                       //"mscoco_trainAsDev_coco30kCompleteModel_cocoTypes_affinity.scores",
+                        "mscoco_trainAsDev_coco30kComplete_affinity.scores",
+                        Overlord.dataPath + "tacl201708/scores/mscoco_train_nonvis.scores", false);
+
+                System.exit(0);
+*/
 
 
+                if(split.equals("train") && dataset.equals("mscoco"))
+                    split = "trainAsDev";
+                Preprocess.export_phraseLocalization_ccaLists(docSet, split,
+                        Overlord.dataPath + "tacl201708/cca/" + dataset + "_boxes/",
+                        Overlord.dataPath + "tacl201708/cca/" + dataset + "_" + split);
+
+                System.exit(0);
+
+
+
+
+                String[] topTenNobox = {"street", "park", "water", "area", "beach",
+                                        "city", "stage", "building", "game", "field"};
+                Map<String, List<String>> exampleCaps = new HashMap<>();
+                Map<String, List<Double>> docStatDict = new HashMap<>();
+                for(String lemma : topTenNobox){
+                    for(String label : new String[]{"nonvis", "nobox", "box"}){
+                        exampleCaps.put(label + "_" + lemma, new ArrayList<>());
+                        for(String boxLabel : new String[]{"boxes", "mentions", "capMentions"}){
+                            docStatDict.put(label + "_" + lemma + "_" + boxLabel, new ArrayList<>());
+                        }
+                    }
+                }
+
+                for(Document d : docSet){
+                    int totalBoxes = d.getBoundingBoxSet().size();
+                    int totalMentions = d.getMentionList().size();
+
+
+                    for(Caption c : d.getCaptionList()) {
+                        int capMentions = c.getMentionList().size();
+
+                        for (Mention m : c.getMentionList()) {
+                            String normHead = m.getHead().getLemma().toLowerCase();
+                            if(Arrays.asList(topTenNobox).contains(normHead)){
+                                if (m.getChainID().equals("0")) {
+                                    exampleCaps.get("nonvis_" + normHead).add(c.toString());
+                                    docStatDict.get("nonvis_" + normHead + "_boxes").add(1.0*totalBoxes);
+                                    docStatDict.get("nonvis_" + normHead + "_mentions").add(1.0*totalMentions);
+                                    docStatDict.get("nonvis_" + normHead + "_capMentions").add(1.0*capMentions);
+                                } else if (d.getBoxSetForMention(m).isEmpty()) {
+                                    exampleCaps.get("nobox_" + normHead).add(c.toString());
+                                    docStatDict.get("nobox_" + normHead + "_boxes").add(1.0*totalBoxes);
+                                    docStatDict.get("nobox_" + normHead + "_mentions").add(1.0*totalMentions);
+                                    docStatDict.get("nobox_" + normHead + "_capMentions").add(1.0*capMentions);
+                                } else {
+                                    exampleCaps.get("box_" + normHead).add(c.toString());
+                                    docStatDict.get("box_" + normHead + "_boxes").add(1.0*totalBoxes);
+                                    docStatDict.get("box_" + normHead + "_mentions").add(1.0*totalMentions);
+                                    docStatDict.get("box_" + normHead + "_capMentions").add(1.0*capMentions);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                for(String lemma : topTenNobox){
+                    for(String label : new String[]{"nonvis", "nobox", "box"}){
+                        for(String boxLabel : new String[]{"boxes", "mentions", "capMentions"}){
+                            String group = label + "_" + lemma + "_" + boxLabel;
+                            System.out.printf("\t %s: %.2f\n", group, StatisticalUtil.getMean(docStatDict.get(group)));
+                        }
+                    }
+                }
+                System.exit(0);
+
+                List<String> ll_topTen = new ArrayList<>();
+                for(String lemma : topTenNobox){
+                    String[] labels = {"nonvis", "nobox", "box"};
+                    for(String label : labels){
+                        String groupName = label + "_" + lemma;
+                        ll_topTen.add("");
+                        ll_topTen.add("--------------- " + groupName + " ---------------");
+
+                        List<String> caps = exampleCaps.get(groupName);
+                        Collections.shuffle(caps);
+                        for(int i=0; i<Math.min(caps.size(), 50); i++)
+                            ll_topTen.add(caps.get(i));
+                    }
+                }
+                FileIO.writeFile(ll_topTen, "ex_topTenNobox", "txt", true);
+
+                System.exit(0);
+
+
+                Map<String, DoubleDict<String>> histDict = new HashMap<>();
+                String[] histLabels = {"nonvis", "nobox", "box", "nonvis_heads", "nobox_heads", "box_heads"};
+                for(String histLabel : histLabels)
+                    histDict.put(histLabel, new DoubleDict<>());
+
+                Map<String, Set<String>> mentionCapDict = new HashMap<>();
+                for (Document d : docSet) {
+                    for (Mention m : d.getMentionList()) {
+                        String normText = m.toString().toLowerCase();
+                        String normHead = m.getHead().getLemma().toLowerCase();
+
+                        if (!mentionCapDict.containsKey(normText))
+                            mentionCapDict.put(normText, new HashSet<>());
+                        mentionCapDict.get(normText).add(d.getID() + "#" + m.getCaptionIdx());
+
+                        if (m.getChainID().equals("0")) {
+                            histDict.get("nonvis").increment(normText);
+                            histDict.get("nonvis_heads").increment(normHead);
+                        } else if (d.getBoxSetForMention(m).isEmpty()){
+                            histDict.get("nobox").increment(normText);
+                            histDict.get("nobox_heads").increment(normHead);
+                        } else {
+                            histDict.get("box").increment(normText);
+                            histDict.get("box_heads").increment(normHead);
+                        }
+                    }
+                }
+
+                Map<String, String> captionDict = new HashMap<>();
+                for (Document d : docSet)
+                    for (int i = 0; i < d.getCaptionList().size(); i++)
+                        captionDict.put(d.getID() + "#" + i, d.getCaptionList().get(i).toString());
+
+                for(String histLabel : histLabels){
+                    double histTotal = histDict.get(histLabel).getSum();
+                    List<String> ll = new ArrayList<>();
+                    for(String normText : histDict.get(histLabel).getSortedByValKeys(true)){
+                        ll.add(String.format("%s --- %d (%.2f%%)",
+                                normText, (int)histDict.get(histLabel).get(normText),
+                                100.0 * histDict.get(histLabel).get(normText) / histTotal));
+                    }
+                    String filename, ext;
+
+                    if(histLabel.contains("heads")){
+                        filename = "hist_" + histLabel;
+                        ext = "csv";
+                    } else {
+                        for(String normText : histDict.get(histLabel).getSortedByValKeys(true)){
+                            ll.add(String.format("%s --- %d (%.2f%%)",
+                                    normText, (int)histDict.get(histLabel).get(normText),
+                                    100.0 * histDict.get(histLabel).get(normText) / histTotal));
+                        }
+                        for(String normText : histDict.get(histLabel).getSortedByValKeys(true)){
+                            ll.add(String.format("%s --- %d (%.2f%%)",
+                                    normText, (int)histDict.get(histLabel).get(normText),
+                                    100.0 * histDict.get(histLabel).get(normText) / histTotal));
+                            for(String capID : mentionCapDict.get(normText))
+                                ll.add("\t" + captionDict.get(capID));
+                        }
+                        filename = "ex_" + histLabel + "Context";
+                        ext = "txt";
+                    }
+                    FileIO.writeFile(ll, filename, ext, true);
+                }
+                System.exit(0);
+
+
+                ClassifyUtil.evaluateNonvis(docSet, Overlord.dataPath + "tacl201708/scores/");
+
+
+
+                DoubleDict<String> labelHist = new DoubleDict<>();
+                for(Document d : docSet){
+                    Set<String> subsetMentions = d.getSubsetMentions();
+                    List<Mention> mentions = d.getMentionList();
+                    for(int i=0; i<mentions.size(); i++){
+                        Mention m_i = mentions.get(i);
+                        if(m_i.getChainID().equals("0"))
+                            continue;
+
+                        for(int j=i+1; j<mentions.size(); j++){
+                            Mention m_j = mentions.get(j);
+                            if(m_j.getChainID().equals("0"))
+                                continue;
+
+                            String id_ij = Document.getMentionPairStr(m_i, m_j);
+                            String id_ji = Document.getMentionPairStr(m_j, m_i);
+
+                            if(m_i.getChainID().equals(m_j.getChainID()))
+                                labelHist.increment("coref", 2);
+                            else if(subsetMentions.contains(id_ij))
+                                labelHist.increment("subset");
+                            else if(subsetMentions.contains(id_ji))
+                                labelHist.increment("supset");
+                            else
+                                labelHist.increment("null", 2);
+                        }
+                    }
+                }
+                double totalLabels = labelHist.getSum();
+                for(String key : labelHist.keySet())
+                    labelHist.divide(key, totalLabels);
+                System.out.println(labelHist);
+                System.exit(0);
+
+
+
+
+
+
+                Preprocess.export_categories(docSet);
+
+                System.exit(0);
+
+
+                List<String> ll_affinity = new ArrayList<>();
+                for(Document d : docSet){
+                    List<Mention> mentions = d.getMentionList();
+                    Set<BoundingBox> boxes = d.getBoundingBoxSet();
+                    for(Mention m : mentions){
+                        String mentionCats = Mention.getLexicalEntry_cocoCategory(m, true);
+                        for(BoundingBox b : boxes){
+                            String id = m.getUniqueID() + "|" + b.getUniqueID();
+                            double pred_1 = 0.0000000000000000000000001;
+                            double pred_0 = 0.9999999999999999999999999;
+                            if(mentionCats != null && mentionCats.contains(b.getCategory())){
+                                double tmp = pred_1;
+                                pred_1 = pred_0;
+                                pred_0 = tmp;
+                            }
+                            ll_affinity.add(id + "," + Math.log(pred_0) + "," + Math.log(pred_1));
+                        }
+                    }
+                }
+                FileIO.writeFile(ll_affinity, dataset + "_" + split + "_heur_affinity", "csv", false);
+                System.exit(0);
+
+
+
+//000000233079.jpg#1;mention:1|000000233079.jpg;box:15,-0.0308530183369,-3.49390754091
+
+
+
+                ClassifyUtil.exportStanfordCorefConll(docSet);
 
                 //ClassifyUtil.evaluateAffinity_coco(docSet, Overlord.dataPath +
                 //        "tacl201708/scores/mscoco_dev_30k_affinity.scores",
@@ -1298,50 +1584,6 @@ public class Overlord
                 docSet = DocumentLoader.getDocumentSet(conn, imgIDs);*/
 
 
-                Map<Mention, AttrStruct> attributeDict =
-                        ClassifyUtil.attributeAttachment_agent(docSet);
-                DoubleDict<AttrStruct> attrFreqs = new DoubleDict<>();
-                Map<Mention, String> mentionCapDict = new HashMap<>();
-                for(Document d : docSet)
-                    for(Caption c : d.getCaptionList())
-                        for(Mention m : c.getMentionList())
-                            mentionCapDict.put(m, c.toString());
-
-                for(Mention m : attributeDict.keySet()){
-                    AttrStruct as = attributeDict.get(m);
-                    attrFreqs.increment(as, as.getNumAttributes());
-                }
-                int attr_idx = 0;
-                List<String> ll_attr = new ArrayList<>();
-                for(AttrStruct as : attrFreqs.getSortedByValKeys(true)){
-                    attr_idx++;
-                    if(attr_idx < 10) {
-                        ll_attr.add(as.toLatexString());
-                        String cap = "";
-                        for(Mention m : as.getAttributeMentions())
-                            if(mentionCapDict.containsKey(m))
-                                cap = mentionCapDict.get(m);
-                        ll_attr.add(cap);
-                        ll_attr.add("");
-                    }
-                }
-                attr_idx = 0;
-                for(AttrStruct as : attrFreqs.getSortedByValKeys(false)){
-                    if(!as.getAttributeMentions().isEmpty()){
-                        attr_idx++;
-                        if(attr_idx < 10) {
-                            ll_attr.add(as.toLatexString());
-                            String cap = "";
-                            for(Mention m : as.getAttributeMentions())
-                                if(mentionCapDict.containsKey(m))
-                                    cap = mentionCapDict.get(m);
-                            ll_attr.add(cap);
-                            ll_attr.add("");
-                        }
-                    }
-                }
-                FileIO.writeFile(ll_attr, "ex_attr", "txt", true);
-
                 //Minion.export_attachmentCases(docSet);
                 System.exit(0);
                 /*
@@ -1417,14 +1659,18 @@ public class Overlord
                 if(featsToExtract.equals("relation")){
                     ClassifyUtil.exportFeatures_relation(docSet, _outroot, numThreads,
                             !parser.getBoolean("exclude_subset"),
-                            !parser.getBoolean("exclude_partof"));
+                            !parser.getBoolean("exclude_partof"),
+                            parser.getBoolean("include_cardinality"),
+                            parser.getString("cardinality_scores"));
                 }
                 else if(featsToExtract.equals("affinity")) {
                     ClassifyUtil.exportFeatures_affinity(docSet, split);
                 } else if(featsToExtract.equals("nonvis")) {
-                    ClassifyUtil.exportFeatures_nonvis(docSet, _outroot);
-                } else if(featsToExtract.equals("box_card")) {
-                    ClassifyUtil.exportFeatures_boxCard(docSet, _outroot);
+                    ClassifyUtil.exportFeatures_nonvis(docSet, _outroot,
+                            parser.getBoolean("include_cardinality"),
+                            parser.getString("cardinality_scores"));
+                } else if(featsToExtract.equals("card")) {
+                    ClassifyUtil.exportFeatures_cardinality(docSet, _outroot);
                 }
             } else if(buildDB != null){
                 System.out.println("WARNING: there's a bug where certain cardinalities are null");
@@ -1447,40 +1693,46 @@ public class Overlord
             String relationFile = parser.getString("relation_scores");
             String affinityFile = parser.getString("affinity_scores");
             String cardinalityFile = parser.getString("cardinality_scores");
-            String typeCostFile = Overlord.flickr30kResources + "hist_typePairLogProb.csv";
 
             //Set up the relation inference module
-            ILPInference relInf = null;
-            switch(parser.getString("inf_type")){
-                case "relation": relInf = new ILPInference(docSet, nonvisFile,
-                        relationFile, typeCostFile, null, null,
-                        parser.getString("graph_root"), parser.getDouble("alpha"));
+            ILPInference inf = null;
+            ILPInference.InferenceType infType =
+                    ILPInference.InferenceType.valueOf(parser.getString("inf_type").toUpperCase());
+            switch(infType){
+                case RELATION: inf = new ILPInference(docSet, infType, nonvisFile, relationFile,
+                        null, null, parser.getString("graph_root"),
+                        parser.getBoolean("include_type_constraint"),
+                        parser.getBoolean("exclude_box_exigence"),
+                        parser.getBoolean("exclude_subset"));
                     break;
-                case "grounding": relInf = new ILPInference(docSet, nonvisFile,
-                        null, null, affinityFile, cardinalityFile,
-                        parser.getString("graph_root"), parser.getDouble("alpha"));
+                case GROUNDING: inf = new ILPInference(docSet, infType, nonvisFile, null,
+                        affinityFile, cardinalityFile, parser.getString("graph_root"),
+                        parser.getBoolean("include_type_constraint"),
+                        parser.getBoolean("exclude_box_exigence"),
+                        parser.getBoolean("exclude_subset"));
                     break;
-                case "joint": relInf = new ILPInference(docSet, nonvisFile,
-                        relationFile, typeCostFile, affinityFile, cardinalityFile,
-                        parser.getString("graph_root"), parser.getDouble("alpha"));
+                case JOINT:
+                case JOINT_AFTER_REL:
+                case JOINT_AFTER_GRND:
+                        inf = new ILPInference(docSet, infType, nonvisFile, relationFile,
+                        affinityFile, cardinalityFile, parser.getString("graph_root"),
+                        parser.getBoolean("include_type_constraint"),
+                        parser.getBoolean("exclude_box_exigence"),
+                        parser.getBoolean("exclude_subset"));
                     break;
             }
 
 
-            if(relInf == null){
+            if(inf== null){
                 Logger.log(new Exception("Could not create relation inference module"));
                 System.exit(1);
             }
 
-            //Set the max label to 1 if we're excluding subsets
-            if(parser.getBoolean("exclude_subset"))
-                relInf.setMaxRelationLabel(1);
-
             //Do inference
-            relInf.infer(numThreads, parser.getBoolean("type_constraint"));
+            inf.infer(numThreads);
 
             //And evaluate it
-            relInf.evaluate(parser.getBoolean("export_files"));
+            inf.evaluate(parser.getBoolean("export_files"));
         }
 	}
 

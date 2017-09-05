@@ -39,6 +39,15 @@ public abstract class ClassifyUtil {
     protected static Set<String> _stopWords;
     protected static List<String> _hypernyms;
 
+    //other static lists
+    private static Set<String> _articles;
+    private static Set<String> _prps;
+    private static Set<String> _masses;
+    private static Set<String> _collectives;
+    private static Set<String> _portions;
+    private static Map<String, Integer> _collectives_kv;
+    private static Map<String, Integer> _quantifiers_kv;
+
     //onehot lists
     private static Map<String, Integer> _typePairs;
     private static Map<String, Integer> _leftPairs;
@@ -50,6 +59,8 @@ public abstract class ClassifyUtil {
     private static Map<String, Integer> _modifierPairs;
     private static Map<String, Integer> _numericPairs;
     private static Map<String, Integer> _prepositionPairs;
+    private static Map<String, Integer> _categories;
+    private static Map<String, Integer> _categoryPairs;
     private static Map<String, Integer> _heads;
     private static Map<String, Integer> _modifiers;
     private static Map<String, Integer> _numerics;
@@ -97,6 +108,8 @@ public abstract class ClassifyUtil {
      */
     private static void _featurePreprocessing(Collection<Document> docSet)
     {
+        Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
+
         Logger.log("Feature preprocessing (onehot index dictionaries)");
         _typePairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_typePair_ordered.csv", 1000);
         _leftPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_leftPair_ordered.csv", 1000);
@@ -120,6 +133,8 @@ public abstract class ClassifyUtil {
         _pronouns = _loadOnehotDict(Overlord.flickr30kResources + "hist_pronoun.csv", 1);
         _pronounTypes = _loadOnehotDict(Overlord.flickr30kResources + "hist_pronounType.csv", 0);
         _nonvisuals = _loadOnehotDict(Overlord.flickr30kResources + "hist_nonvisual.csv", 1);
+        _categories = _loadOnehotDict(Overlord.mscocoResources + "hist_cocoCategory.csv", 1000);
+        _categoryPairs = _loadOnehotDict(Overlord.mscocoResources + "hist_cocoCategoryPair.csv", 1000);
 
         _hypernyms = new ArrayList<>();
         for(String[] row : FileIO.readFile_table(Overlord.flickr30kResources + "hist_hypernym.csv"))
@@ -265,6 +280,36 @@ public abstract class ClassifyUtil {
                 }
             }
         }
+
+
+        _articles = new HashSet<>(Arrays.asList(new String[]{"a", "the", "an"}));
+        _prps = new HashSet<>(Arrays.asList(new String[]{"his", "hers", "its", "their"}));
+        _masses = new HashSet<>(Arrays.asList(
+                new String[]{"sand", "snow", "tea", "water","beer", "coffee",
+                        "dirt", "corn", "liquid", "wine"}));
+        _collectives = new HashSet<>(
+                FileIO.readFile_lineList(
+                        Overlord.flickr30kResources + "collectiveNouns.txt", true));
+        _portions = new HashSet<>(Arrays.asList(
+                new String[]{"pile", "sheet", "puddle", "mound",
+                        "spray", "loaf", "cloud", "drink",
+                        "sea", "handful", "bale", "line", "row"}));
+        _collectives_kv = new HashMap<>();
+        _collectives_kv.put("couple", 2);
+        _collectives_kv.put("pair", 2);
+        _collectives_kv.put("both", 2);
+        _collectives_kv.put("either", 2);
+        _collectives_kv.put("trio", 3);
+        _collectives_kv.put("quartet", 4);
+        _collectives_kv.put("dozen", 12);
+        _collectives_kv.put("hundred", 100);
+
+        _quantifiers_kv = new HashMap<>();
+        _quantifiers_kv.put("several", 3);
+        _quantifiers_kv.put("many", 3);
+        _quantifiers_kv.put("multiple", 2);
+        _quantifiers_kv.put("a few", 2);
+        _quantifiers_kv.put("some", 2);
     }
 
     /**Exports relation features to outroot.feats, using the given collection of
@@ -279,7 +324,8 @@ public abstract class ClassifyUtil {
      */
     public static void exportFeatures_relation(Collection<Document> docSet, String outroot,
                                                int numThreads, boolean includeSubset,
-                                               boolean includePartOf)
+                                               boolean includePartOf, boolean includeCard,
+                                               String cardFile)
     {
         //One of the problems we've run into is accounting for
         //the exact number of feature vectors we expect, how many we process,
@@ -326,11 +372,29 @@ public abstract class ClassifyUtil {
         List<Document> docList = new ArrayList<>(docSet);
         RelationExtractionThread[] threadPool = new RelationExtractionThread[numThreads];
 
+        //Read cardinality scores, if we have them
+        Map<String, Map<String, double[]>> cardinalityScores = new HashMap<>();
+        if(includeCard && !docList.get(0).getIsTrain()){
+            Logger.log("Reading cardinality scores");
+            Map<String, double[]> cardScores = readMccScoresFile(cardFile);
+
+            //As a pre-processing step, split the scores
+            //by document so the threads don't need to carry
+            //the entire list
+            for(String mentionID : cardScores.keySet()){
+                String docID = mentionID.split("#")[0];
+                if(!cardinalityScores.containsKey(docID))
+                    cardinalityScores.put(docID, new HashMap<>());
+                cardinalityScores.get(docID).put(mentionID, cardScores.get(mentionID));
+            }
+        }
+
         //create and start our first set of threads
         int docIdx = 0;
         for(int i=0; i<numThreads; i++) {
             Document d = docList.get(docIdx);
-            threadPool[i] = new RelationExtractionThread(d, includeSubset, includePartOf);
+            threadPool[i] = new RelationExtractionThread(d, includeSubset, includePartOf,
+                    includeCard, cardinalityScores.get(d.getID()));
             docIdx++;
         }
 
@@ -372,7 +436,8 @@ public abstract class ClassifyUtil {
                         Logger.logStatus("Processed %d images (%.2f%%)",
                                 docIdx, 100.0*(double)docIdx / docList.size());
                         Document d = docList.get(docIdx);
-                        threadPool[i] = new RelationExtractionThread(d, includeSubset, includePartOf);
+                        threadPool[i] = new RelationExtractionThread(d, includeSubset, includePartOf,
+                                includeCard, cardinalityScores.get(d.getID()));
                         docIdx++;
                         threadPool[i].start();
                         foundLiveThread = true;
@@ -424,9 +489,10 @@ public abstract class ClassifyUtil {
      * @param docSet
      * @param outroot
      */
-    public static void exportFeatures_nonvis(Collection<Document> docSet, String outroot)
+    public static void exportFeatures_nonvis(Collection<Document> docSet, String outroot,
+                                             boolean includeCard, String cardFile)
     {
-        _exportFeatures_singleMention(docSet, outroot, "nonvis");
+        _exportFeatures_singleMention(docSet, outroot, "nonvis", includeCard, cardFile);
     }
 
     /**Exports box cardinality features to [outroot].feats, using the given docSet
@@ -434,10 +500,21 @@ public abstract class ClassifyUtil {
      * @param docSet
      * @param outroot
      */
-    public static void exportFeatures_boxCard(Collection<Document> docSet, String outroot)
+    public static void exportFeatures_cardinality(Collection<Document> docSet, String outroot)
     {
-        _exportFeatures_singleMention(docSet, outroot, "boxCard");
+        _exportFeatures_singleMention(docSet, outroot, "cardinality", false, null);
     }
+
+    public static void exportFeatures_combined(Collection<Document> docSet, String outRoot)
+    {
+        _exportFeatures_singleMention(docSet, outRoot, "combined", false, null);
+    }
+
+    public static void exportFeatures_phase1(Collection<Document> docSet, String outRoot)
+    {
+        _exportFeatures_singleMention(docSet, outRoot, "phase_1", false, null);
+    }
+
 
     /**Exports features representing a single mention (since we're double dipping with some of these);
      * labelType \in {'nonvis', 'boxCard'}
@@ -446,10 +523,26 @@ public abstract class ClassifyUtil {
      * @param outroot
      * @param labelType
      */
-    private static void _exportFeatures_singleMention(Collection<Document> docSet, String outroot, String labelType)
+    private static void _exportFeatures_singleMention(Collection<Document> docSet,
+                                                      String outroot, String labelType,
+                                                      boolean includeCard, String cardFile)
     {
         //Feature preprocessing
         _featurePreprocessing(docSet);
+
+        //Hacky way to grab which document set we're working with
+        boolean isTrainSet = false;
+        for(Document d : docSet){
+            isTrainSet = d.getIsTrain();
+            break;
+        }
+
+        //Read cardinality scores, if we have them
+        Map<String, double[]> cardScores = new HashMap<>();
+        if(includeCard && !isTrainSet){
+            Logger.log("Reading cardinality scores");
+            cardScores = readMccScoresFile(cardFile);
+        }
 
         Map<String, Object> metaDict = new HashMap<>();
 
@@ -465,32 +558,48 @@ public abstract class ClassifyUtil {
 
                 FeatureVector fv = new FeatureVector();
                 fv.comments = m.getUniqueID();
-                if(labelType.equals("nonvis"))
-                    fv.label = m.getChainID().equals("0") ? 1.0 : 0.0;
-                else if (labelType.equals("boxCard"))
-                    fv.label = Math.min(d.getBoxSetForMention(m).size(), 11);
+                switch(labelType){
+                    case "nonvis": fv.label = m.getChainID().equals("0") ? 1.0 : 0.0;
+                        break;
+                    case "cardinality": fv.label = Math.min(d.getBoxSetForMention(m).size(), 11);
+                        break;
+                    case "combined":
+                        fv.label = m.getChainID().equals("0") ? -1.0 :
+                                Math.min(d.getBoxSetForMention(m).size(), 11);
+                        break;
+                    case "phase_1":
+                        if(m.getChainID().equals("0"))
+                            fv.label = 0.0;
+                        else if(d.getBoxSetForMention(m).isEmpty())
+                            fv.label = 1.0;
+                        else
+                            fv.label = 2.0;
+                        break;
+                }
                 int currentIdx = 1;
 
                 //head word / modifiers / lexical type
                 String head = m.getHead().toString().toLowerCase();
-                currentIdx = addOneHotVector(head, fv, currentIdx, _heads, "head", metaDict);
+                currentIdx = _addOneHotVector(head, fv, currentIdx, _heads, "head_onehot", metaDict);
                 String[] mods = m.getModifiers();
-                currentIdx = addOneHotVector(mods[0], fv, currentIdx, _numerics, "numeric", metaDict);
-                currentIdx = addOneHotVector(mods[1], fv, currentIdx, _modifiers, "modifier", metaDict);
+                currentIdx = _addOneHotVector(mods[0], fv, currentIdx, _numerics, "numeric_onehot", metaDict);
+                currentIdx = _addOneHotVector(mods[1], fv, currentIdx, _modifiers, "modifier_onehot", metaDict);
                 String lexType = m.getLexicalType().toLowerCase();
-                currentIdx = addOneHotVector(lexType, fv, currentIdx, _types, "lexical_type", metaDict);
+                currentIdx = _addOneHotVector(lexType, fv, currentIdx, _types, "lexical_type_onehot", metaDict);
+                String cocoCat = Mention.getLexicalEntry_cocoCategory(m, true);
+                currentIdx = _addOneHotVector(cocoCat, fv, currentIdx, _categories, "coco_category_onehot", metaDict);
                 String lemma = m.getHead().getLemma().toLowerCase();
-                currentIdx = addOneHotVector(lemma, fv, currentIdx, _nonvisuals, "nonvisual_lemma", metaDict);
+                currentIdx = _addOneHotVector(lemma, fv, currentIdx, _nonvisuals, "nonvisual_lemma_onehot", metaDict);
 
                 //governing verbs
                 Chunk subjOf = _subjOfDict.get(m); String subjOfStr = "";
                 if(subjOf != null)
                     subjOfStr = subjOf.getTokenList().get(subjOf.getTokenList().size()-1).toString().toLowerCase();
-                currentIdx = addOneHotVector(subjOfStr, fv, currentIdx, _subjOfs, "subj_of", metaDict);
+                currentIdx = _addOneHotVector(subjOfStr, fv, currentIdx, _subjOfs, "subj_of_onehot", metaDict);
                 Chunk objOf = _objOfDict.get(m); String objOfStr = "";
                 if(objOf != null)
                     objOfStr = objOf.getTokenList().get(objOf.getTokenList().size()-1).toString().toLowerCase();
-                currentIdx = addOneHotVector(objOfStr, fv, currentIdx, _objOfs, "obj_of", metaDict);
+                currentIdx = _addOneHotVector(objOfStr, fv, currentIdx, _objOfs, "obj_of_onehot", metaDict);
 
                 //right and left chunk types
                 Chunk[] chunkNeighbors = _mentionChunkNeighborDict.get(m);
@@ -499,24 +608,24 @@ public abstract class ClassifyUtil {
                     leftChunkType = chunkNeighbors[0].getChunkType();
                 if(chunkNeighbors != null && chunkNeighbors[1] != null)
                     rightChunkType = chunkNeighbors[1].getChunkType();
-                currentIdx = addOneHotVector(leftChunkType, fv,
-                        currentIdx, _lefts, "left_chunk_type", metaDict);
-                currentIdx = addOneHotVector(rightChunkType, fv,
-                        currentIdx, _rights, "right_chunk_type", metaDict);
+                currentIdx = _addOneHotVector(leftChunkType, fv,
+                        currentIdx, _lefts, "left_chunk_type_onehot", metaDict);
+                currentIdx = _addOneHotVector(rightChunkType, fv,
+                        currentIdx, _rights, "right_chunk_type_onehot", metaDict);
 
                 //pronouns
                 String pronomText = m.toString().toLowerCase();
-                currentIdx = addOneHotVector(pronomText, fv, currentIdx, _pronouns, "pronoun", metaDict);
+                currentIdx = _addOneHotVector(pronomText, fv, currentIdx, _pronouns, "pronoun_onehot", metaDict);
                 String pronomType = m.getPronounType().toString();
-                currentIdx = addOneHotVector(pronomType, fv, currentIdx, _pronounTypes, "pronoun_type", metaDict);
+                currentIdx = _addOneHotVector(pronomType, fv, currentIdx, _pronounTypes, "pronoun_type_onehot", metaDict);
 
                 //prepositions
                 String leftPrep = _prepDict_left.containsKey(m) ? _prepDict_left.get(m) : "";
                 String rightPrep = _prepDict_right.containsKey(m) ? _prepDict_right.get(m) : "";
-                currentIdx = addOneHotVector(leftPrep, fv, currentIdx,
-                        _prepositions, "left_preposition", metaDict);
-                currentIdx = addOneHotVector(rightPrep, fv, currentIdx,
-                        _prepositions, "right_preposition", metaDict);
+                currentIdx = _addOneHotVector(leftPrep, fv, currentIdx,
+                        _prepositions, "left_preposition_onehot", metaDict);
+                currentIdx = _addOneHotVector(rightPrep, fv, currentIdx,
+                        _prepositions, "right_preposition_onehot", metaDict);
 
                 //hypernyms
                 Set<String> hypSet = _hypDict.get(m.getHead().getLemma().toLowerCase());
@@ -526,9 +635,80 @@ public abstract class ClassifyUtil {
                         fv.addFeature(currentIdx, 1.0);
                     currentIdx++;
                 }
-                addMetaEntry("hypernym_bow", start, currentIdx, metaDict);
-                addMetaEntry("max_idx", currentIdx+1, metaDict);
+                _addMetaEntry("hypernym_bow", start, currentIdx, metaDict);
 
+                //new subset features
+                int f_hasArticle = _articles.contains(m.getTokenList().get(0).toString().toLowerCase()) ? TRUE : FALSE;
+                fv.addFeature(currentIdx, f_hasArticle);
+                _addMetaEntry("hasArticle", currentIdx, metaDict);
+                currentIdx++;
+                int f_hasMass = _masses.contains(m.getTokenList().get(0).toString().toLowerCase()) ? TRUE : FALSE;
+                fv.addFeature(currentIdx, f_hasMass);
+                _addMetaEntry("hasMass", currentIdx, metaDict);
+                currentIdx++;
+                int f_hasCollective = FALSE;
+                for(Token t : m.getTokenList())
+                    if(_collectives.contains(t.toString().toLowerCase()) || _collectives.contains(t.getLemma()))
+                        f_hasCollective = TRUE;
+                fv.addFeature(currentIdx, f_hasCollective);
+                _addMetaEntry("hasCollective", currentIdx, metaDict);
+                currentIdx++;
+                int f_hasPortion = FALSE;
+                for(Token t : m.getTokenList())
+                    if(_portions.contains(t.toString().toLowerCase()) || _portions.contains(t.getLemma()))
+                        f_hasPortion = TRUE;
+                fv.addFeature(currentIdx, f_hasPortion);
+                _addMetaEntry("hasPortion", currentIdx, metaDict);
+                currentIdx++;
+                int f_isSingular = m.getHead().getPosTag().equals("NN") ||
+                        m.getHead().getPosTag().equals("NNP") ? TRUE : FALSE;
+                int f_isPlural = m.getHead().getPosTag().equals("NNS") ||
+                        m.getHead().getPosTag().equals("NNPS") ? TRUE : FALSE;
+                fv.addFeature(currentIdx, f_isSingular);
+                _addMetaEntry("isSingular", currentIdx, metaDict);
+                currentIdx++;
+                fv.addFeature(currentIdx, f_isPlural);
+                _addMetaEntry("isPlural", currentIdx, metaDict);
+                currentIdx++;
+                int f_isSemi = m.getPronounType() ==
+                        Mention.PRONOUN_TYPE.SEMI ? TRUE : FALSE;
+                fv.addFeature(currentIdx, f_isSemi);
+                _addMetaEntry("isSemi", currentIdx, metaDict);
+                currentIdx++;
+                int[] f_knownQuantity = new int[6];
+                Arrays.fill(f_knownQuantity, FALSE);
+                int knownQuantity = _getKnownQuantity(m);
+                if(knownQuantity > 0 && knownQuantity <= 6)
+                    f_knownQuantity[knownQuantity-1] = TRUE;
+                for(int i=1; i<=6; i++){
+                    fv.addFeature(currentIdx, f_knownQuantity[i-1]);
+                    _addMetaEntry("knownQuantity_" + i, currentIdx, metaDict);
+                    currentIdx++;
+                }
+
+                //Add the cardinality scores _if_ specified
+                if(includeCard){
+                    double[] cardArr = new double[12];
+                    if(d.getIsTrain()){
+                        //For training documents, we use the
+                        //actual cardinality
+                        int goldCard = Math.min(d.getBoxSetForMention(m).size(), 11);
+                        Arrays.fill(cardArr, 0.0);
+                        cardArr[goldCard] = 1.0;
+                    } else {
+                        //Get the predicted scores for this mention
+                        cardArr = cardScores.get(m.getUniqueID());
+                    }
+
+                    for(int i=0; i<12; i++){
+                        fv.addFeature(currentIdx, cardArr[i]);
+                        _addMetaEntry("cardinality_" + i, currentIdx, metaDict);
+                        currentIdx++;
+                    }
+                }
+
+                //Add the max and the feature fector to the set
+                _addMetaEntry("max_idx", currentIdx+1, metaDict);
                 fvSet.add(fv);
             }
         }
@@ -1281,7 +1461,7 @@ public abstract class ClassifyUtil {
                             //attributes for agents
                             for (Mention agent : agentCluster) {
                                 if (!attributeDict.containsKey(agent))
-                                    attributeDict.put(agent, toAttrStruct(agent));
+                                    attributeDict.put(agent, _toAttrStruct(agent));
 
                                 String partsHead = m_parts.getHead().getLemma().toLowerCase();
                                 String partsNormText = m_parts.toString().toLowerCase();
@@ -1298,7 +1478,7 @@ public abstract class ClassifyUtil {
                                     attributeDict.get(agent).clearAttribute("gender");
                                     attributeDict.get(agent).addAttribute("gender", "male");
                                 }
-                                attributeDict.get(agent).addAttribute(attrClass, toAttrStruct(m_parts));
+                                attributeDict.get(agent).addAttribute(attrClass, _toAttrStruct(m_parts));
                             }
                         }
                     }
@@ -1354,7 +1534,7 @@ public abstract class ClassifyUtil {
                         //associate the nearest agent with this clothing cluster
                         for (Mention agent : nearestAgentCluster) {
                             if (!attributeDict.containsKey(agent))
-                                attributeDict.put(agent, toAttrStruct(agent));
+                                attributeDict.put(agent, _toAttrStruct(agent));
                             for (Mention cm : clothCluster) {
                                 String clothNormText = cm.toString().toLowerCase();
                                 String clothHead = cm.getHead().getLemma().toLowerCase();
@@ -1371,7 +1551,7 @@ public abstract class ClassifyUtil {
                                     attributeDict.get(agent).clearAttribute("gender");
                                     attributeDict.get(agent).addAttribute("gender", "male");
                                 }
-                                attributeDict.get(agent).addAttribute(attrClass, toAttrStruct(cm));
+                                attributeDict.get(agent).addAttribute(attrClass, _toAttrStruct(cm));
                             }
                         }
                     }
@@ -1393,11 +1573,11 @@ public abstract class ClassifyUtil {
                             if (lastTokenIdx + 1 == nextChunk.getTokenRange()[0] &&
                                     nextChunk.getChunkType().equals("ADJP")) {
                                 if (!attributeDict.containsKey(m))
-                                    attributeDict.put(m, toAttrStruct(m));
+                                    attributeDict.put(m, _toAttrStruct(m));
                                 String attrName = "modifier";
                                 if (_colors.contains(nextChunk.toString().toLowerCase()))
                                     attrName = "color";
-                                attributeDict.get(m).addAttribute(attrName, toAttrStruct(nextChunk));
+                                attributeDict.get(m).addAttribute(attrName, _toAttrStruct(nextChunk));
                             }
                         }
                     }
@@ -1408,7 +1588,7 @@ public abstract class ClassifyUtil {
         return attributeDict;
     }
 
-    private static AttrStruct toAttrStruct(Annotation core) {
+    private static AttrStruct _toAttrStruct(Annotation core) {
         AttrStruct attr = new AttrStruct(core);
         String text = null;
         List<Token> ownedTokens = new ArrayList<>();
@@ -1478,7 +1658,7 @@ public abstract class ClassifyUtil {
      * @param thresh
      * @return
      */
-    private static List<String> getOneHotList(String filename, int thresh)
+    private static List<String> _getOneHotList(String filename, int thresh)
     {
         List<String> strList = new ArrayList<>();
         String[][] table = FileIO.readFile_table(filename);
@@ -1529,9 +1709,9 @@ public abstract class ClassifyUtil {
      * @param metaDict
      * @return The new idxOffset (idxOffset + idxDict.size())
      */
-    private static int addOneHotVector(String item, FeatureVector fv,
-            int idxOffset, Map<String, Integer> idxDict,
-            String featName, Map<String, Object> metaDict)
+    private static int _addOneHotVector(String item, FeatureVector fv,
+                                        int idxOffset, Map<String, Integer> idxDict,
+                                        String featName, Map<String, Object> metaDict)
     {
         //Add this item to the vector (if it's present)
         int end = idxOffset + idxDict.size() + 1;
@@ -1539,7 +1719,7 @@ public abstract class ClassifyUtil {
             fv.addFeature(idxOffset + idxDict.get(item) + 1, 1.0);
 
         //Add this onehot to the meta dict
-        addMetaEntry(featName, idxOffset, end, metaDict);
+        _addMetaEntry(featName, idxOffset, end, metaDict);
 
         return end+1;
     }
@@ -1550,8 +1730,8 @@ public abstract class ClassifyUtil {
      * @param idx
      * @param metaDict
      */
-    private static void addMetaEntry(String featName, int idx,
-                                     Map<String, Object> metaDict)
+    private static void _addMetaEntry(String featName, int idx,
+                                      Map<String, Object> metaDict)
     {
         if(!metaDict.containsKey(featName))
             metaDict.put(featName, idx);
@@ -1564,11 +1744,44 @@ public abstract class ClassifyUtil {
      * @param endIdx
      * @param metaDict
      */
-    private static void addMetaEntry(String featName, int startIdx, int endIdx,
-                                     Map<String, Object> metaDict)
+    private static void _addMetaEntry(String featName, int startIdx, int endIdx,
+                                      Map<String, Object> metaDict)
     {
         if(!metaDict.containsKey(featName))
             metaDict.put(featName, new Integer[]{startIdx, endIdx});
+    }
+
+    /**Returns the sum of all mentioned numbers (as collectives,
+     * numerals, or quantifiers) in the mention; NOTE: this is
+     * particularly crude, but works in most cases
+     *
+     * @param m
+     * @return
+     */
+    private static int _getKnownQuantity(Mention m)
+    {
+        int knownQuantity = 0;
+        for(Token t : m.getTokenList()){
+            String text = t.toString().toLowerCase();
+            String lemma = t.getLemma();
+
+            if(_collectives_kv.containsKey(text))
+                knownQuantity += _collectives_kv.get(text);
+            else if(_collectives_kv.containsKey(lemma))
+                knownQuantity += _collectives_kv.get(lemma);
+            else if(_quantifiers_kv.containsKey(text))
+                knownQuantity += _quantifiers_kv.get(text);
+            else if(_quantifiers_kv.containsKey(lemma))
+                knownQuantity += _quantifiers_kv.get(lemma);
+        }
+        List<Integer> valList = new ArrayList<>();
+        String[] words = m.toString().replace("-", " - ").split(" ");
+        for(int i=0; i<words.length; i++)
+            valList.add(Util.parseInt(words[i]));
+        for(int i=0; i<words.length; i++)
+            if(valList.get(i) != null)
+                knownQuantity += valList.get(i);
+        return knownQuantity;
     }
 
     /**In order to (drastically) improve relation feature extraction
@@ -1582,6 +1795,8 @@ public abstract class ClassifyUtil {
         private Document _doc;
         private Set<String> _subsetMentions;
         private Set<String> _partOfMentions;
+        private Map<String, double[]> _cardScores;
+        private boolean _includeCard;
         Collection<FeatureVector> fvSet;
 
         /**Initializes a RelationExtractionThread, which extracts
@@ -1593,18 +1808,35 @@ public abstract class ClassifyUtil {
          * @param includeSubset Whether to include the subset label (2/3)
          * @param includePartOf Whether to include the partOf label (4)
          */
-        RelationExtractionThread(Document doc, boolean includeSubset, boolean includePartOf)
+        RelationExtractionThread(Document doc, boolean includeSubset, boolean includePartOf,
+                                 boolean includeCard, Map<String, double[]> cardScores)
         {
             _doc = doc;
             fvSet = new HashSet<>();
             _subsetMentions = new HashSet<>();
             _partOfMentions = new HashSet<>();
+            _includeCard = includeCard;
 
             //Vary what we load into memory based on the labeling scheme
             if(includeSubset)
                 _subsetMentions = _doc.getSubsetMentions();
             if(includePartOf)
                 _partOfMentions = _doc.getPartOfMentions();
+
+            //incorporate cardinality scores, if applicable
+            _cardScores = new HashMap<>();
+            if(includeCard){
+                if(cardScores == null){
+                    for(Mention m : _doc.getMentionList()){
+                        double[] cardinalities = new double[12];
+                        Arrays.fill(cardinalities, 0.0);
+                        cardinalities[Math.min(_doc.getBoxSetForMention(m).size(), 11)] = 1.0;
+                        _cardScores.put(m.getUniqueID(), cardinalities);
+                    }
+                } else {
+                    _cardScores = cardScores;
+                }
+            }
         }
 
         /**Returns the meta-dict for these relation features
@@ -1661,14 +1893,14 @@ public abstract class ClassifyUtil {
             //Caption match
             Integer f_capMatch = m1.getCaptionIdx() == m2.getCaptionIdx() ? 1 : 0;
             featureList.add(f_capMatch);
-            addMetaEntry("caption_match", currentIdx++, _metaDict);
+            _addMetaEntry("caption_match", currentIdx++, _metaDict);
 
             //caption match _and_ m_i < m_j / m_j < m_i
             Integer f_ante_ij = 0;
             if(m1.getCaptionIdx() == m2.getCaptionIdx() && m1.getIdx() < m2.getIdx())
                 f_ante_ij = 1;
             featureList.add(f_ante_ij);
-            addMetaEntry("antecedent_ij", currentIdx++, _metaDict);
+            _addMetaEntry("antecedent_ij", currentIdx++, _metaDict);
 
             //Head matches
             String head_1 = m1.getHead().toString().toLowerCase();
@@ -1678,9 +1910,9 @@ public abstract class ClassifyUtil {
             Integer f_headMatch = head_1.equals(head_2) ? TRUE : FALSE;
             Integer f_headPOSMatch = headPos_1.equals(headPos_2) ? TRUE : FALSE;
             featureList.add(f_headMatch);
-            addMetaEntry("head_match", currentIdx++, _metaDict);
+            _addMetaEntry("head_match", currentIdx++, _metaDict);
             featureList.add(f_headPOSMatch);
-            addMetaEntry("head_pos_match", currentIdx++, _metaDict);
+            _addMetaEntry("head_pos_match", currentIdx++, _metaDict);
 
             //Lemma match / substring feat
             String lemma_1 = m1.getHead().getLemma().toLowerCase();
@@ -1689,9 +1921,9 @@ public abstract class ClassifyUtil {
             Integer f_substring = lemma_1.contains(lemma_2) ||
                     lemma_2.contains(lemma_1) ? TRUE : FALSE;
             featureList.add(f_lemmaMatch);
-            addMetaEntry("lemma_match", currentIdx++, _metaDict);
+            _addMetaEntry("lemma_match", currentIdx++, _metaDict);
             featureList.add(f_substring);
-            addMetaEntry("substring_match", currentIdx++, _metaDict);
+            _addMetaEntry("substring_match", currentIdx++, _metaDict);
 
             //Extent match
             String extent_1 = m1.toString().replace(head_1, "");
@@ -1700,7 +1932,21 @@ public abstract class ClassifyUtil {
             if(!extent_1.isEmpty() || !extent_2.isEmpty())
                 f_extentMatch = extent_1.equalsIgnoreCase(extent_2) ? TRUE : FALSE;
             featureList.add(f_extentMatch);
-            addMetaEntry("extent_match", currentIdx++, _metaDict);
+            _addMetaEntry("extent_match", currentIdx++, _metaDict);
+
+            //Personal prep match
+            String prp_1 = "", prp_2 = "";
+            for(Token t : m1.getTokenList())
+                if(_prps.contains(t.toString().toLowerCase()))
+                    prp_1 = t.toString().toLowerCase();
+            for(Token t : m2.getTokenList())
+                if(_prps.contains(t.toString().toLowerCase()))
+                    prp_2 = t.toString().toLowerCase();
+            int f_prpMatch = FALSE;
+            if(!prp_1.isEmpty() && prp_1.equals(prp_2))
+                f_prpMatch = TRUE;
+            featureList.add(f_prpMatch);
+            _addMetaEntry("prp_match", currentIdx++, _metaDict);
 
             //Type match
             String type_1 = m1.getLexicalType();
@@ -1730,11 +1976,28 @@ public abstract class ClassifyUtil {
                 }
             }
             featureList.add(f_lexTypeMatch);
-            addMetaEntry("lex_type_match", currentIdx++, _metaDict);
+            _addMetaEntry("lex_type_match", currentIdx++, _metaDict);
             featureList.add(f_lexTypeMatch_other);
-            addMetaEntry("lex_type_match_other", currentIdx++, _metaDict);
+            _addMetaEntry("lex_type_match_other", currentIdx++, _metaDict);
             featureList.add(f_lexTypeMatch_only);
-            addMetaEntry("lex_type_match_only", currentIdx++, _metaDict);
+            _addMetaEntry("lex_type_match_only", currentIdx++, _metaDict);
+
+            String cocoCat_1 = Mention.getLexicalEntry_cocoCategory(m1, true);
+            String cocoCat_2 = Mention.getLexicalEntry_cocoCategory(m2, true);
+            Double f_cocoCatMatch = 0.0;
+            if(cocoCat_1 != null && cocoCat_2 != null){
+                if(cocoCat_1.equals(cocoCat_2))
+                    f_cocoCatMatch = 1.0;
+
+                Set<String> lex_1 = new HashSet<>(Arrays.asList(cocoCat_1.split("/")));
+                Set<String> lex_2 = new HashSet<>(Arrays.asList(cocoCat_2.split("/")));
+                Set<String> intersection = new HashSet<>(lex_1);
+                intersection.retainAll(lex_2);
+                if(intersection.size() > 0)
+                    f_cocoCatMatch = 0.5;
+            }
+            featureList.add(f_cocoCatMatch);
+            _addMetaEntry("coco_cat_match", currentIdx++, _metaDict);
 
             //Chunk neighbor features -- left
             Chunk leftNeighbor_1 = _mentionChunkNeighborDict.get(m1)[0];
@@ -1746,7 +2009,7 @@ public abstract class ClassifyUtil {
                 leftChunkType_2 = leftNeighbor_2.getChunkType();
             Integer f_leftMatch = _getChunkTypeMatch(leftChunkType_1, leftChunkType_2);
             featureList.add(f_leftMatch);
-            addMetaEntry("left_chunk_match", currentIdx++, _metaDict);
+            _addMetaEntry("left_chunk_match", currentIdx++, _metaDict);
 
             //Chunk neighbor features -- right
             Chunk rightNeighbor_1 = _mentionChunkNeighborDict.get(m1)[1];
@@ -1758,7 +2021,7 @@ public abstract class ClassifyUtil {
                 rightChunkType_2 = rightNeighbor_2.getChunkType();
             Integer f_rightMatch = _getChunkTypeMatch(rightChunkType_1, rightChunkType_2);
             featureList.add(f_rightMatch);
-            addMetaEntry("right_chunk_match", currentIdx++, _metaDict);
+            _addMetaEntry("right_chunk_match", currentIdx++, _metaDict);
 
             //Dependency tree features
             DependencyNode root_1 = _doc.getCaption(m1.getCaptionIdx()).getRootNode();
@@ -1772,7 +2035,7 @@ public abstract class ClassifyUtil {
                 f_outDepMatch = outRel.isEmpty() ? FALSE : TRUE;
             }
             featureList.add(f_outDepMatch);
-            addMetaEntry("out_dep_match", currentIdx++, _metaDict);
+            _addMetaEntry("out_dep_match", currentIdx++, _metaDict);
 
             //Determiner plural match (assume the first word is
             //the determiner candidate); FALSE is only assigned when
@@ -1789,7 +2052,7 @@ public abstract class ClassifyUtil {
             else if(_detSet_plural.contains(firstWord_1) && _detSet_singular.contains(firstWord_2))
                 f_detPluralMatch = FALSE;
             featureList.add(f_detPluralMatch);
-            addMetaEntry("det_plural_match", currentIdx++, _metaDict);
+            _addMetaEntry("det_plural_match", currentIdx++, _metaDict);
 
             //Verb features
             Chunk subjOf_1 = _subjOfDict.get(m1), subjOf_2 = _subjOfDict.get(m2);
@@ -1824,20 +2087,20 @@ public abstract class ClassifyUtil {
                 f_objOfMatch = FALSE;
             featureList.add(f_isSubjMatch);
             featureList.add(f_isObjMatch);
-            addMetaEntry("is_subj_match", currentIdx++, _metaDict);
-            addMetaEntry("is_obj_match", currentIdx++, _metaDict);
+            _addMetaEntry("is_subj_match", currentIdx++, _metaDict);
+            _addMetaEntry("is_obj_match", currentIdx++, _metaDict);
             featureList.add(f_subjOfMatch);
             featureList.add(f_objOfMatch);
-            addMetaEntry("subj_of_match", currentIdx++, _metaDict);
-            addMetaEntry("obj_of_match", currentIdx++, _metaDict);
+            _addMetaEntry("subj_of_match", currentIdx++, _metaDict);
+            _addMetaEntry("obj_of_match", currentIdx++, _metaDict);
             featureList.add(f_isSubj_1);
             featureList.add(f_isSubj_2);
-            addMetaEntry("is_subj_i", currentIdx++, _metaDict);
-            addMetaEntry("is_subj_j", currentIdx++, _metaDict);
+            _addMetaEntry("is_subj_i", currentIdx++, _metaDict);
+            _addMetaEntry("is_subj_j", currentIdx++, _metaDict);
             featureList.add(f_isObj_1);
             featureList.add(f_isObj_2);
-            addMetaEntry("is_obj_i", currentIdx++, _metaDict);
-            addMetaEntry("is_obj_j", currentIdx++, _metaDict);
+            _addMetaEntry("is_obj_i", currentIdx++, _metaDict);
+            _addMetaEntry("is_obj_j", currentIdx++, _metaDict);
 
             //features for semi-pronouns
             Integer f_semiPronom_1 = m1.getPronounType() == Mention.PRONOUN_TYPE.SEMI ? TRUE : FALSE;
@@ -1931,28 +2194,116 @@ public abstract class ClassifyUtil {
             }
             featureList.add(f_semiPronom_1);
             featureList.add(f_semiPronom_2);
-            addMetaEntry("semi_pronom_i", currentIdx++, _metaDict);
-            addMetaEntry("semi_pronom_j", currentIdx++, _metaDict);
+            _addMetaEntry("semi_pronom_i", currentIdx++, _metaDict);
+            _addMetaEntry("semi_pronom_j", currentIdx++, _metaDict);
             featureList.add(f_xOfY_1);
             featureList.add(f_xOfY_2);
-            addMetaEntry("x_of_y_i", currentIdx++, _metaDict);
-            addMetaEntry("x_of_y_j", currentIdx++, _metaDict);
+            _addMetaEntry("x_of_y_i", currentIdx++, _metaDict);
+            _addMetaEntry("x_of_y_j", currentIdx++, _metaDict);
             featureList.add(f_appos_1);
             featureList.add(f_appos_2);
-            addMetaEntry("appositive_i", currentIdx++, _metaDict);
-            addMetaEntry("appositive_j", currentIdx++, _metaDict);
+            _addMetaEntry("appositive_i", currentIdx++, _metaDict);
+            _addMetaEntry("appositive_j", currentIdx++, _metaDict);
             featureList.add(f_inList_1);
             featureList.add(f_inList_2);
-            addMetaEntry("in_list_i", currentIdx++, _metaDict);
-            addMetaEntry("in_list_j", currentIdx++, _metaDict);
+            _addMetaEntry("in_list_i", currentIdx++, _metaDict);
+            _addMetaEntry("in_list_j", currentIdx++, _metaDict);
+
+
+            //new subset features
+            int f_hasArticle_i = _articles.contains(m1.getTokenList().get(0).toString().toLowerCase()) ? TRUE : FALSE;
+            int f_hasArticle_j = _articles.contains(m2.getTokenList().get(0).toString().toLowerCase()) ? TRUE : FALSE;
+            featureList.add(f_hasArticle_i);
+            featureList.add(f_hasArticle_j);
+            _addMetaEntry("hasArticle_i", currentIdx++, _metaDict);
+            _addMetaEntry("hasArticle_j", currentIdx++, _metaDict);
+            int f_isMass_i = _masses.contains(m1.getTokenList().get(0).toString().toLowerCase()) ? TRUE : FALSE;
+            int f_isMass_j = _masses.contains(m2.getTokenList().get(0).toString().toLowerCase()) ? TRUE : FALSE;
+            featureList.add(f_isMass_i);
+            featureList.add(f_isMass_j);
+            _addMetaEntry("isMass_i", currentIdx++, _metaDict);
+            _addMetaEntry("isMass_j", currentIdx++, _metaDict);
+            int f_hasCollective_i = FALSE;
+            int f_hasCollective_j = FALSE;
+            for(Token t : m1.getTokenList())
+                if(_collectives.contains(t.toString().toLowerCase()) || _collectives.contains(t.getLemma()))
+                    f_hasCollective_i = TRUE;
+            for(Token t : m2.getTokenList())
+                if(_collectives.contains(t.toString().toLowerCase()) || _collectives.contains(t.getLemma()))
+                    f_hasCollective_j = TRUE;
+            featureList.add(f_hasCollective_i);
+            featureList.add(f_hasCollective_j);
+            _addMetaEntry("hasCollective_i", currentIdx++, _metaDict);
+            _addMetaEntry("hasCollective_j", currentIdx++, _metaDict);
+            int f_hasPortion_i = FALSE;
+            int f_hasPortion_j = FALSE;
+            for(Token t : m1.getTokenList())
+                if(_portions.contains(t.toString().toLowerCase()) || _portions.contains(t.getLemma()))
+                    f_hasPortion_i = TRUE;
+            for(Token t : m2.getTokenList())
+                if(_portions.contains(t.toString().toLowerCase()) || _portions.contains(t.getLemma()))
+                    f_hasPortion_j = TRUE;
+            featureList.add(f_hasPortion_i);
+            featureList.add(f_hasPortion_j);
+            _addMetaEntry("hasPortion_i", currentIdx++, _metaDict);
+            _addMetaEntry("hasPortion_j", currentIdx++, _metaDict);
+            int f_isSingular_i = m1.getHead().getPosTag().equals("NN") ||
+                    m1.getHead().getPosTag().equals("NNP") ? TRUE : FALSE;
+            int f_isSingular_j = m2.getHead().getPosTag().equals("NN") ||
+                    m2.getHead().getPosTag().equals("NNP") ? TRUE : FALSE;
+            int f_isPlural_i = m1.getHead().getPosTag().equals("NNS") ||
+                    m1.getHead().getPosTag().equals("NNPS") ? TRUE : FALSE;
+            int f_isPlural_j = m2.getHead().getPosTag().equals("NNS") ||
+                    m2.getHead().getPosTag().equals("NNPS") ? TRUE : FALSE;
+            featureList.add(f_isSingular_i);
+            featureList.add(f_isSingular_j);
+            featureList.add(f_isPlural_i);
+            featureList.add(f_isPlural_j);
+            _addMetaEntry("isSingular_i", currentIdx++, _metaDict);
+            _addMetaEntry("isSingular_j", currentIdx++, _metaDict);
+            _addMetaEntry("isPlural_i", currentIdx++, _metaDict);
+            _addMetaEntry("isPlural_j", currentIdx++, _metaDict);
+            int f_isSemi_i = m1.getPronounType() ==
+                    Mention.PRONOUN_TYPE.SEMI ? TRUE : FALSE;
+            int f_isSemi_j = m2.getPronounType() ==
+                    Mention.PRONOUN_TYPE.SEMI ? TRUE : FALSE;
+            featureList.add(f_isSemi_i);
+            featureList.add(f_isSemi_j);
+            _addMetaEntry("isSemi_i", currentIdx++, _metaDict);
+            _addMetaEntry("isSemi_j", currentIdx++, _metaDict);
+            int[] f_knownQuantity_i = new int[6], f_knownQuantity_j = new int[6];
+            Arrays.fill(f_knownQuantity_i, FALSE);
+            Arrays.fill(f_knownQuantity_j, FALSE);
+            int knownQuantity_i = _getKnownQuantity(m1);
+            int knownQuantity_j = _getKnownQuantity(m2);
+            if(knownQuantity_i > 0 && knownQuantity_i <= 6)
+                f_knownQuantity_i[knownQuantity_i-1] = TRUE;
+            if(knownQuantity_j > 0 && knownQuantity_j <= 6)
+                f_knownQuantity_j[knownQuantity_j-1] = TRUE;
+            for(int i=1; i<=6; i++){
+                featureList.add(f_knownQuantity_i[i-1]);
+                featureList.add(f_knownQuantity_j[i-1]);
+                _addMetaEntry("knownQuantity_i_" + i, currentIdx++, _metaDict);
+                _addMetaEntry("knownQuantity_j_" + i, currentIdx++, _metaDict);
+            }
+
+            //Cardinality features
+            if(_includeCard){
+                for(int i=0; i<12; i++){
+                    featureList.add(_cardScores.get(m1.getUniqueID())[i]);
+                    featureList.add(_cardScores.get(m2.getUniqueID())[i]);
+                    _addMetaEntry("cardinality_i_" + i, currentIdx++, _metaDict);
+                    _addMetaEntry("cardinality_j_" + i, currentIdx++, _metaDict);
+                }
+            }
 
             //Meta features
             Integer f_headNotLemma = f_headMatch == TRUE && f_lemmaMatch == FALSE ? TRUE : FALSE;
             Integer f_lemmaNotHead = f_lemmaMatch == TRUE && f_headMatch == FALSE ? TRUE : FALSE;
             featureList.add(f_headNotLemma);
             featureList.add(f_lemmaNotHead);
-            addMetaEntry("head_not_lemma", currentIdx++, _metaDict);
-            addMetaEntry("lemma_not_head", currentIdx++, _metaDict);
+            _addMetaEntry("head_not_lemma", currentIdx++, _metaDict);
+            _addMetaEntry("lemma_not_head", currentIdx++, _metaDict);
 
             //Add all features to the vector
             FeatureVector fv = new FeatureVector();
@@ -1995,32 +2346,34 @@ public abstract class ClassifyUtil {
 
             //Add one hot vectors, which internally adjust the feature vector but
             //doesn't adjust the idx
-            currentIdx = addOneHotVector(headPair, fv, currentIdx,
+            currentIdx = _addOneHotVector(headPair, fv, currentIdx,
                     _headPairs, "head_pair_onehot", _metaDict);
-            currentIdx = addOneHotVector(lemmaPair, fv, currentIdx,
+            currentIdx = _addOneHotVector(lemmaPair, fv, currentIdx,
                     _lemmaPairs, "lemma_pair_onehot", _metaDict);
-            currentIdx = addOneHotVector(typePair, fv, currentIdx,
+            currentIdx = _addOneHotVector(typePair, fv, currentIdx,
                     _typePairs, "lex_type_pair_onehot", _metaDict);
-            currentIdx = addOneHotVector(leftPair, fv, currentIdx,
+            currentIdx = _addOneHotVector(leftPair, fv, currentIdx,
                     _leftPairs, "left_pair_onehot", _metaDict);
-            currentIdx = addOneHotVector(rightPair, fv, currentIdx,
+            currentIdx = _addOneHotVector(rightPair, fv, currentIdx,
                     _rightPairs, "right_pair_onehot", _metaDict);
-            currentIdx = addOneHotVector(subjOfPair, fv, currentIdx,
+            currentIdx = _addOneHotVector(subjOfPair, fv, currentIdx,
                     _subjOfPairs, "subj_of_onehot", _metaDict);
-            currentIdx = addOneHotVector(objOfPair, fv, currentIdx,
+            currentIdx = _addOneHotVector(objOfPair, fv, currentIdx,
                     _objOfPairs, "obj_of_onehot", _metaDict);
-            currentIdx = addOneHotVector(firstWord_1, fv, currentIdx,
+            currentIdx = _addOneHotVector(firstWord_1, fv, currentIdx,
                     _dets, "det_1_onehot", _metaDict);
-            currentIdx = addOneHotVector(firstWord_2, fv, currentIdx,
+            currentIdx = _addOneHotVector(firstWord_2, fv, currentIdx,
                     _dets, "det_2_onehot", _metaDict);
-            currentIdx = addOneHotVector(numericPair, fv, currentIdx,
+            currentIdx = _addOneHotVector(numericPair, fv, currentIdx,
                     _numericPairs, "numeric_pair_onehot", _metaDict);
-            currentIdx = addOneHotVector(modPair, fv, currentIdx,
+            currentIdx = _addOneHotVector(modPair, fv, currentIdx,
                     _modifierPairs, "modifier_pair_onehot", _metaDict);
-            currentIdx = addOneHotVector(leftPrepPair, fv, currentIdx,
+            currentIdx = _addOneHotVector(leftPrepPair, fv, currentIdx,
                     _prepositionPairs, "left_preposition_pair_onehot", _metaDict);
-            currentIdx = addOneHotVector(rightPrepPair, fv, currentIdx,
+            currentIdx = _addOneHotVector(rightPrepPair, fv, currentIdx,
                     _prepositionPairs, "right_preposition_pair_onehot", _metaDict);
+            currentIdx = _addOneHotVector(cocoCat_1 + "|" + cocoCat_2, fv, currentIdx,
+                    _categoryPairs, "categoryPair_onehot", _metaDict);
 
             //We treat hypernyms as -- not a onehot -- but a bag-of-words;
             //Given core concepts, we keep a vector where entry ij
@@ -2040,7 +2393,7 @@ public abstract class ClassifyUtil {
                     currentIdx++;
                 }
             }
-            addMetaEntry("hypernym_bow", start, currentIdx, _metaDict);
+            _addMetaEntry("hypernym_bow", start, currentIdx, _metaDict);
 
             //Finally, add a three-way label indicating if these mentions are
             //coreferent, subset, or null\
@@ -2060,7 +2413,7 @@ public abstract class ClassifyUtil {
                     label = 4; //Part of relations are asymmetrical
             }
 
-            addMetaEntry("max_idx", currentIdx+1, _metaDict);
+            _addMetaEntry("max_idx", currentIdx+1, _metaDict);
             fv.label = label;
             fv.comments = Document.getMentionPairStr(m1, m2);
             return fv;

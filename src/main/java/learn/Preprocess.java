@@ -19,6 +19,193 @@ import java.util.*;
 public class Preprocess
 {
 
+    /***** Neural Network Preprocessing Functions ****/
+
+    /**Exports four files for use with our neural networks (two for
+     * intra caption and cross caption, respectively). Sentence files
+     * contain captions less punctuation, and are in the format
+     *      [img_id]#[cap_idx]      [cap_less_punc]
+     * Mention index files associate mention pair IDs with the
+     * index of the first word in the sentence(s), the last word
+     * in the sentence(s), and the first and last words of each mention in
+     * the pair. Thus, these are formatted as
+     * Intra-caption
+     *      [pair_id]   0,[cap_end_idx],[m1_start],[m1_end],[m2_start],[m2_end]   [label]
+     # Cross-caption
+     #      [pair_id]   0,[cap_1_end_idx],0,[cap_2_end_idx],[m1_start],[m1_end],[m2_start],[m2_end]   [label]
+     *
+     * @param docSet    Collection of Documents for which files will be
+     *                  generated
+     * @param outroot   Location to which the files should be saved
+     */
+    public static void export_neuralRelationFiles(Collection<Document> docSet,
+                                                  String outroot)
+    {
+        DoubleDict<Integer> labelDistro = new DoubleDict<>();
+
+        //First, run through the captions, removing punctuation
+        Map<String, List<Token>> normCaptions = new HashMap<>();
+        Map<String, List<Mention>> mentionsByCaption = new HashMap<>();
+        for(Document d : docSet){
+            for(Caption c : d.getCaptionList()){
+                List<Token> tokens = new ArrayList<>();;
+                for(Token t : c.getTokenList())
+                    if(StringUtil.hasAlphaNum(t.toString()))
+                        tokens.add(t);
+                if(!tokens.isEmpty())
+                    normCaptions.put(c.getUniqueID(), tokens);
+                mentionsByCaption.put(c.getUniqueID(), c.getMentionList());
+            }
+        }
+        List<String> ll_normCaptions = new ArrayList<>();
+        normCaptions.forEach((k,v) -> ll_normCaptions.add(k + "\t" + StringUtil.listToString(v, " ")));
+
+        //Now that we have the captions (and associated IDs),
+        //we want to associate each mention with their new bounds
+        Map<String, int[]> mentionIndices = new HashMap<>();
+        for(String capID : normCaptions.keySet()){
+            List<Token> tokens = normCaptions.get(capID);
+            for(int i=0; i<tokens.size(); i++){
+                Token t = tokens.get(i);
+
+                //If this token belongs to a mention, determine
+                //if this is the first or last token in that mention
+                if(t.mentionIdx > -1){
+                    Mention m = mentionsByCaption.get(capID).get(t.mentionIdx);
+                    if(!mentionIndices.containsKey(m.getUniqueID()))
+                        mentionIndices.put(m.getUniqueID(), new int[]{0, tokens.size()-1, -1, -1});
+                    if(i == 0 || tokens.get(i-1).mentionIdx != t.mentionIdx)
+                        mentionIndices.get(m.getUniqueID())[2] = i;
+                    if(i == tokens.size()-1 || tokens.get(i+1).mentionIdx != t.mentionIdx)
+                        mentionIndices.get(m.getUniqueID())[3] = i;
+                }
+            }
+        }
+
+        //For each mention, we now have a mapping of IDs to normalized caption indices;
+        //now we want to pair up these mentions (with intra-caption and cross-caption
+        //mentions being stored separately)
+        List<String> ll_mentionPairIndices_intra = new ArrayList<>();
+        List<String> ll_mentionPairIndices_cross = new ArrayList<>();
+        for(Document d : docSet){
+            List<Mention> mentions = d.getMentionList();
+            Set<String> subsetMentions = d.getSubsetMentions();
+            for(int i=0; i<mentions.size(); i++){
+                Mention m_i = mentions.get(i);
+                int[] indices_i = mentionIndices.get(m_i.getUniqueID());
+
+                //As always, we skip nonvisual mentions
+                if(d.getIsTrain() && m_i.getChainID().equals("0"))
+                    continue;
+
+                //Skip any mentions which -- for some reason -- have
+                //no alphanumeric characters
+                if(indices_i == null)
+                    continue;
+
+                for(int j=i+1; j<mentions.size(); j++){
+                    Mention m_j = mentions.get(j);
+                    int[] indices_j = mentionIndices.get(m_j.getUniqueID());
+
+                    if(d.getIsTrain() && m_j.getChainID().equals("0"))
+                        continue;
+                    if(indices_j == null)
+                        continue;
+
+                    Integer[] indices_ij, indices_ji;
+                    boolean intra = m_i.getCaptionIdx() == m_j.getCaptionIdx();
+                    if(intra){
+                        //In the intra-caption case, each mention can be represented
+                        //by six indices
+                        indices_ij = new Integer[6];
+                        indices_ij[0] = indices_i[0];
+                        indices_ij[1] = indices_i[1];
+                        indices_ij[2] = indices_i[2];
+                        indices_ij[3] = indices_i[3];
+                        indices_ij[4] = indices_j[2];
+                        indices_ij[5] = indices_j[3];
+
+                        //Recall that indices_i[1] == indices_j[1], since
+                        //they originate from the same caption
+                        indices_ji = new Integer[6];
+                        indices_ji[0] = indices_j[0];
+                        indices_ji[1] = indices_j[1];
+                        indices_ji[2] = indices_j[2];
+                        indices_ji[3] = indices_j[3];
+                        indices_ji[4] = indices_i[2];
+                        indices_ji[5] = indices_i[3];
+                    } else {
+                        //In the cross-caption case, each mention can be represented
+                        //by eight indices
+                        indices_ij = new Integer[8];
+                        indices_ij[0] = indices_i[0];
+                        indices_ij[1] = indices_i[1];
+                        indices_ij[2] = indices_j[0];
+                        indices_ij[3] = indices_j[1];
+                        indices_ij[4] = indices_i[2];
+                        indices_ij[5] = indices_i[3];
+                        indices_ij[6] = indices_j[2];
+                        indices_ij[7] = indices_j[3];
+
+                        indices_ji = new Integer[8];
+                        indices_ji[0] = indices_j[0];
+                        indices_ji[1] = indices_j[1];
+                        indices_ji[2] = indices_i[0];
+                        indices_ji[3] = indices_i[1];
+                        indices_ji[4] = indices_j[2];
+                        indices_ji[5] = indices_j[3];
+                        indices_ji[6] = indices_i[2];
+                        indices_ji[7] = indices_i[3];
+                    }
+
+                    //Find the label for this pair
+                    int label_ij = 0, label_ji = 0;
+                    String id_ij = Document.getMentionPairStr(m_i, m_j);
+                    String id_ji = Document.getMentionPairStr(m_j, m_i);
+                    if(!m_i.getChainID().equals("0") && !m_j.getChainID().equals("0")){
+                        if(m_i.getChainID().equals(m_j.getChainID())){
+                            label_ij = 1;
+                            label_ji = 1;
+                        } else if(subsetMentions.contains(id_ij)){
+                            label_ij = 2;
+                            label_ji = 3;
+                        } else if(subsetMentions.contains(id_ji)){
+                            label_ji = 2;
+                            label_ij = 3;
+                        }
+                    }
+                    labelDistro.increment(label_ij);
+                    labelDistro.increment(label_ji);
+
+                    //Finally, add the lines to the appropriate line list
+                    String line_ij = id_ij + "\t" + StringUtil.listToString(indices_ij, ",") +
+                                     "\t" + label_ij;
+                    String line_ji = id_ji + "\t" + StringUtil.listToString(indices_ji, ",") +
+                                     "\t" + label_ji;
+                    if(intra){
+                        ll_mentionPairIndices_intra.add(line_ij);
+                        ll_mentionPairIndices_intra.add(line_ji);
+                    } else {
+                        ll_mentionPairIndices_cross.add(line_ij);
+                        ll_mentionPairIndices_cross.add(line_ji);
+                    }
+                }
+            }
+        }
+
+        //Write all of the files
+        FileIO.writeFile(ll_normCaptions, outroot + "_captions", "txt", false);
+        FileIO.writeFile(ll_mentionPairIndices_intra, outroot + "_mentionPairs_intra", "txt", false);
+        FileIO.writeFile(ll_mentionPairIndices_cross, outroot + "_mentionPairs_cross", "txt", false);
+
+        Logger.log("Label Distribution");
+        for(int i=0; i<4; i++)
+            System.out.printf("%d: %.2f%%\n",
+                    i, 100.0 * labelDistro.get(i) / labelDistro.getSum()));
+    }
+
+
+
     /***** Phrase Localization Functions ****/
 
     /**Exports a box coordinate and image ID file for use with
@@ -149,8 +336,6 @@ public class Preprocess
      * @param docSet            Documents from which to generate lists
      * @param dataSplit         Which data split this docSet contains
      *                          (train/dev/test)
-     * @param lexicalTypes      The type of lexical types to use
-     *                          (flickr30k/mscoco_category/mscoco_supercategory)
      * @param boxFeatureDir     Directory containing bounding box features
      *                          (one image's boxes per file)
      * @param outRoot           Root path to which the lists will be written
@@ -158,8 +343,7 @@ public class Preprocess
      *                          and similar)
      */
     public static void export_phraseLocalization_ccaLists(Collection<Document> docSet, String dataSplit,
-                                                          String lexicalTypes, String boxFeatureDir,
-                                                          String outRoot)
+                                                          String boxFeatureDir, String outRoot)
     {
         //Initialize the lexicons
         Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
@@ -206,7 +390,8 @@ public class Preprocess
         //store the in-order lists of box feats and text strings
         List<String> ll_img = new ArrayList<>(), ll_txt = new ArrayList<>();
         List<String> ll_ids = new ArrayList<>(), ll_labels = new ArrayList<>();
-        List<String> ll_types = new ArrayList<>();
+        List<String> ll_types_30k = new ArrayList<>(), ll_types_coco = new ArrayList<>();
+        List<String> ll_types_coco_super = new ArrayList<>();
         DoubleDict<Integer> labelDistro = new DoubleDict<>();
         if(dataSplit.equals("train")){
             //Randomly sample 10 bounding boxes from those that have boxes
@@ -285,20 +470,17 @@ public class Preprocess
                     }
                     String normText = normBuilder.toString().trim();
 
-                    //Add this mention's type, for CCA training purposes
-                    String mentionCat = "";
-                    if(lexicalTypes.equals("flickr30k")) {
-                        mentionCat = m.getLexicalType();
-                        if(mentionCat.equals("other"))
-                            mentionCat = Mention.getLexicalEntry_flickr(m);
-                    } else if(lexicalTypes.equals("mscoco_category"))
-                        mentionCat = Mention.getLexicalEntry_cocoCategory(m, true);
-                    else if(lexicalTypes.equals("mscoco_supercategory"))
-                        mentionCat = Mention.getSuperCategory(Mention.getLexicalEntry_cocoCategory(m, true));
+                    //Add the types to the lists
+                    String type_30k = m.getLexicalType();
+                    if(type_30k.equals("other"))
+                        type_30k = Mention.getLexicalEntry_flickr(m);
+                    ll_types_30k.add(m.getUniqueID() + "," + type_30k);
+                    String type_coco = Mention.getLexicalEntry_cocoCategory(m, true);
+                    ll_types_coco.add(m.getUniqueID() + "," + type_coco);
+                    String type_coco_super = Mention.getSuperCategory(type_coco);
+                    ll_types_coco_super.add(m.getUniqueID() + "," + type_coco_super);
 
-                    ll_types.add(m.getUniqueID() + "," + mentionCat);
-
-                    //Iterate through the box pairings
+                            //Iterate through the box pairings
                     Set<BoundingBox> assocBoxes = d.getBoxSetForMention(m);
                     for(BoundingBox b : d.getBoundingBoxSet()){
                         ll_img.add(StringUtil.listToString(boxFeatDict.get(b.getUniqueID()), ","));
@@ -320,7 +502,9 @@ public class Preprocess
         if(!dataSplit.equals("train")) {
             FileIO.writeFile(ll_ids, outRoot + "_id", "txt", false);
             FileIO.writeFile(ll_labels, outRoot + "_label", "txt", false);
-            FileIO.writeFile(ll_types, outRoot + "_type", "csv", false);
+            FileIO.writeFile(ll_types_30k, outRoot + "_type_30k", "csv", false);
+            FileIO.writeFile(ll_types_coco, outRoot + "_type_coco", "csv", false);
+            FileIO.writeFile(ll_types_coco_super, outRoot + "_type_coco_supercat", "csv", false);
         }
 
         //As a sanity check, print the label distribution
@@ -333,8 +517,6 @@ public class Preprocess
      * is available) and subsamples the mention/box pairs
      *
      * @param docSet            Documents from which to generate lists
-     * @param lexicalTypes      The type of lexical types to use
-     *                          (flickr30k/mscoco_category/mscoco_supercategory)
      * @param boxFeatureDir     Directory containing bounding box features
      *                          (one image's boxes per file)
      * @param outRoot           Root path to which the lists will be written
@@ -634,7 +816,6 @@ public class Preprocess
         FileIO.writeFile(hypPairDict, "hist_hypernymPair", "csv", false);
     }
 
-
     /**Generates nonvisual histogram for use as one-hot feature vector
      *
      * @param docSet    Collections of Documents on which to base the histogram
@@ -655,6 +836,36 @@ public class Preprocess
         FileIO.writeFile(nonvisHist, "hist_nonvisual", "csv", false);
     }
 
+    public static void export_categories(Collection<Document> docSet)
+    {
+        Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
+        DoubleDict<String> catHist = new DoubleDict<>();
+        DoubleDict<String> catPairHist = new DoubleDict<>();
+        for(Document d : docSet){
+            List<Mention> mentions = d.getMentionList();
+            for(int i=0; i<mentions.size(); i++){
+                Mention m_i = mentions.get(i);
+                String cat_i = Mention.getLexicalEntry_cocoCategory(m_i, true);
+                if(cat_i == null)
+                    cat_i = "null";
+                catHist.increment(cat_i);
+
+                for(int j=i+1; j<mentions.size(); j++){
+                    Mention m_j = mentions.get(j);
+                    String cat_j = Mention.getLexicalEntry_cocoCategory(m_j, true);
+                    if(cat_j == null)
+                        cat_j = "null";
+
+                    String cat_ij = cat_i + "|" + cat_j;
+                    String cat_ji = cat_j + "|" + cat_i;
+                    catPairHist.increment(cat_ij);
+                    catPairHist.increment(cat_ji);
+                }
+            }
+        }
+        FileIO.writeFile(catHist, "hist_cocoCategory", "csv", false);
+        FileIO.writeFile(catPairHist, "hist_cocoCategoryPair", "csv", false);
+    }
 
 
     /***** Flickr30kEntities Caption-to-Databse Functions ****/

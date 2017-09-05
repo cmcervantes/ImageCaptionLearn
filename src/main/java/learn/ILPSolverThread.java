@@ -21,147 +21,89 @@ import java.util.Map;
  * [link]: https://github.com/xiaoling/wikifier/blob/master/src/edu/illinois/cs/cogcomp/lbj/coref/decoders/ILPDecoder.java
  */
 public class ILPSolverThread extends Thread {
-    private edu.illinois.cs.cogcomp.lbjava.infer.ILPSolver _solver;
+
+    private String _docID;
     private List<Mention> _mentionList;
     private List<BoundingBox> _boxList;
-    private ILPInference.InferenceType _type;
-    private Map<String, Integer> _fixedLinks;
-    private String _docID;
+    private ILPInference.InferenceType _infType;
+    private int _solverThreads;
+
+    private Map<String, Integer> _fixedRelationLinks;
     private Map<String, double[]> _relScores, _cardScores;
     private Map<String, Double> _affScores;
-    private Map<String, Integer> _relationGraph;
-    private Map<String, Integer> _groundingGraph;
+    private Map<String, Integer> _relationGraph, _groundingGraph;
+
+    private edu.illinois.cs.cogcomp.lbjava.infer.ILPSolver _solver;
     private boolean _foundSolution;
-    private int _solverThreads;
     private boolean _fallbackSolution;
+
+    private boolean _includeSubset;
+    private boolean _includeTypeConstraint;
+    private boolean _includeBoxExigence;
     private int _maxRelationLabel;
-    private boolean _excludeBoxExigence;
-    private boolean _constrainTypes;
 
-    /**
-     * Constructs a new ILPSolverThread for use with Relation inference
+    private Map<Mention, String> _mentionCatDict;
+
+    /**Constructor for relation inference
      *
      * @param mentionList
-     * @param relationScores
-     * @param fixedLinks
-     * @param constrainTypes
-     */
-    public ILPSolverThread(List<Mention> mentionList, Map<String, double[]> relationScores,
-                           Map<String, double[]> typeCosts, Map<String, Integer> fixedLinks,
-                           boolean constrainTypes, int maxRelationLabel, int solverThreads)
-    {
-        _init(ILPInference.InferenceType.RELATION, mentionList, null,
-              relationScores, typeCosts, null, null, fixedLinks,
-              constrainTypes, maxRelationLabel, false, solverThreads);
-    }
-
-    /**
-     * Constructs a new ILPSolverThread for use with Grounding inference
-     *
-     * @param mentionList
-     * @param boxList
-     * @param affinityScores
-     * @param cardinalityScores
-     */
-    public ILPSolverThread(List<Mention> mentionList, List<BoundingBox> boxList,
-                           Map<String, double[]> affinityScores, Map<String, double[]> cardinalityScores,
-                           boolean excludeBoxExigence, int solverThreads)
-    {
-        _init(ILPInference.InferenceType.GROUNDING, mentionList, boxList, null,
-              null, affinityScores, cardinalityScores, null, false, -1,
-                excludeBoxExigence, solverThreads);
-    }
-
-    /**
-     * Constructs a new ILPSolverThread for use with Combined inference
-     *
-     * @param mentionList
-     * @param boxList
-     * @param relationScores
-     * @param affinityScores
-     * @param cardinalityScores
-     * @param fixedLinks
-     * @param constrainTypes
-     */
-    public ILPSolverThread(List<Mention> mentionList, List<BoundingBox> boxList,
-                           Map<String, double[]> relationScores, Map<String, double[]> typeCosts,
-                           Map<String, double[]> affinityScores, Map<String, double[]> cardinalityScores,
-                           Map<String, Integer> fixedLinks, boolean constrainTypes, int maxRelationLabel,
-                           boolean excludeBoxExigence, int solverThreads)
-    {
-        _init(ILPInference.InferenceType.JOINT, mentionList, boxList, relationScores,
-                typeCosts, affinityScores, cardinalityScores, fixedLinks, constrainTypes,
-                maxRelationLabel, excludeBoxExigence, solverThreads);
-    }
-
-    /**
-     * Initializes this thread's internals
-     *
-     * @param mentionList
-     * @param infType
-     * @param relationScores
-     * @param affinityScores
-     * @param cardinalityScores
-     * @param fixedLinks
-     * @param constrainTypes
-     * @param maxRelationLabel
      * @param solverThreads
      */
-    private void _init(ILPInference.InferenceType infType, List<Mention> mentionList,
-                       List<BoundingBox> boxList, Map<String, double[]> relationScores,
-                       Map<String, double[]> typeCosts, Map<String, double[]> affinityScores,
-                       Map<String, double[]> cardinalityScores, Map<String, Integer> fixedLinks,
-                       boolean constrainTypes, int maxRelationLabel, boolean excludeBoxExigence,
-                       int solverThreads)
+    public ILPSolverThread(List<Mention> mentionList, int solverThreads)
     {
-        _mentionList = mentionList; _boxList = boxList;
-        _type = infType; _maxRelationLabel = maxRelationLabel;
-        _excludeBoxExigence = excludeBoxExigence;
-        _constrainTypes = constrainTypes;
+        _init(mentionList, null, ILPInference.InferenceType.RELATION, solverThreads);
+    }
+
+    /**Constructor for grounding and joint inference
+     *
+     * @param mentionList
+     * @param boxList
+     * @param infType
+     * @param solverThreads
+     */
+    public ILPSolverThread(List<Mention> mentionList, List<BoundingBox> boxList,
+                           ILPInference.InferenceType infType, int solverThreads)
+    {
+        _init(mentionList, boxList, infType, solverThreads);
+    }
+
+    /**Initializes all the appropriate variables; assumes various sets
+     * are going to be called before a thread is actually executed
+     *
+     * @param mentionList
+     * @param boxList
+     * @param infType
+     * @param solverThreads
+     */
+    private void _init(List<Mention> mentionList, List<BoundingBox> boxList,
+                       ILPInference.InferenceType infType, int solverThreads)
+    {
+        _mentionList = mentionList;
         _docID = _mentionList.get(0).getDocID();
-        _fixedLinks = new HashMap<>();
-        if (fixedLinks != null) {
-            _fixedLinks = new HashMap<>(fixedLinks);
+        if(boxList != null)
+            _boxList = boxList;
+        _infType = infType;
+        _solverThreads = solverThreads;
 
-            for(int i=0; i<_mentionList.size(); i++){
-                Mention m_i = _mentionList.get(i);
-                for(int j=i+1; j<_mentionList.size(); j++){
-                    Mention m_j = _mentionList.get(j);
+        _fixedRelationLinks = new HashMap<>(); _relScores = new HashMap<>();
+        _cardScores = new HashMap<>(); _affScores = new HashMap<>();
 
-                    //Determine if these mentions are in our fixed links
-                    String pairStr_ij = Document.getMentionPairStr(m_i, m_j);
-                    String pairStr_ji = Document.getMentionPairStr(m_j, m_i);
-                    Integer label_ij = _fixedLinks.get(pairStr_ij);
-                    Integer label_ji = _fixedLinks.get(pairStr_ji);
-                    /*
-                    if(label_ij != null && label_ij == 1 || label_ji != null && label_ji == 1){
-                        //We know that predicted coref pairs come as a pronoun and non-pronom
-                        if(m_i.getPronounType() != Mention.PRONOUN_TYPE.NONE)
-                            _pronomTypeDict.put(m_i, ClassifyUtil.getTypeCostLabel(m_j));
-                        else if(m_j.getPronounType() != Mention.PRONOUN_TYPE.NONE)
-                            _pronomTypeDict.put(m_j, ClassifyUtil.getTypeCostLabel(m_i));
-                    }*/
-                }
-            }
-        }
-
-        //store our scores
-        _relScores = relationScores;
-        _cardScores = cardinalityScores;
-        _affScores = new HashMap<>();
-        if (affinityScores != null)
-            affinityScores.forEach((k, v) -> _affScores.put(k, affinityScores.get(k)[1]));
+        _includeSubset = true;
+        _includeTypeConstraint = false;
+        _includeBoxExigence = true;
+        _maxRelationLabel = 3;
+        _mentionCatDict = new HashMap<>();
 
         //set up our graphs and solver
-        _relationGraph = new HashMap<>();
-        _groundingGraph = new HashMap<>();
+        _relationGraph = new HashMap<>(); _groundingGraph = new HashMap<>();
         _foundSolution = false; _fallbackSolution = false;
         _solverThreads = solverThreads;
         _resetSolver();
     }
 
-    public void setMaxLabel(int maxLabel){_maxRelationLabel = maxLabel;}
-
+    /**Sets up the solver; must be run again for
+     * settings like relation-after-grounding
+     */
     private void _resetSolver()
     {
         GRBEnv gurobiEnv = null;
@@ -198,6 +140,85 @@ public class ILPSolverThread extends Thread {
      */
     public boolean isFallbackSolution(){return _fallbackSolution;}
 
+
+    /* Setup Methods */
+
+    /**Sets the fixed relation links to use during relation
+     * or joint inference
+     *
+     * @param fixedRelationLinks
+     */
+    public void setFixedRelationLinks(Map<String, Integer> fixedRelationLinks)
+    {
+        _fixedRelationLinks = new HashMap<>(fixedRelationLinks);
+    }
+
+    /**Specifies that during relation or joint inference
+     * subset relations should be excluded
+     */
+    public void excludeSubset()
+    {
+        _includeSubset = false;
+        _maxRelationLabel = 1;
+    }
+
+    /**Specifies that a type constraint should be used during
+     * inference (which inference -- and which type constraint --
+     * has changed over multiple revisions)
+     *
+     */
+    public void includeTypeConstraint()
+    {
+        _includeTypeConstraint = true;
+
+        //Now that we know the type constraint
+        //is active, look up all our mentions'
+        //COCO categories
+        for(Mention m : _mentionList){
+            String cocoCat = Mention.getLexicalEntry_cocoCategory(m, true);
+            if(cocoCat != null)
+                _mentionCatDict.put(m, cocoCat);
+        }
+    }
+
+    /**WSpecifies that the box exigence constraint should
+     * be excluded (because datasets like MSCOCO are noisier
+     * than ours)
+     *
+     */
+    public void excludeBoxExigence()
+    {
+        _includeBoxExigence = false;
+    }
+
+    /**Adds the relation scores to the solver thread
+     *
+     * @param relationScores
+     */
+    public void setRelationScores(Map<String, double[]> relationScores)
+    {
+        _relScores = relationScores;
+    }
+
+    /**Adds the cardinality scores to the solver thread
+     *
+     * @param cardinalityScores
+     */
+    public void setCardinalityScores(Map<String, double[]> cardinalityScores)
+    {
+        _cardScores = cardinalityScores;
+    }
+
+    /**Adds the affinity scores to the solver thread
+     *
+     * @param affinityScores
+     */
+    public void setAffinityScores(Map<String, double[]> affinityScores)
+    {
+        affinityScores.forEach((k, v) -> _affScores.put(k, affinityScores.get(k)[1]));
+    }
+
+
     /* Run Methods */
 
     /**
@@ -205,7 +226,7 @@ public class ILPSolverThread extends Thread {
      * internal inference type
      */
     public void run() {
-        switch (_type) {
+        switch (_infType) {
             case RELATION:
                 run_relation();
                 break;
@@ -213,18 +234,24 @@ public class ILPSolverThread extends Thread {
                 run_grounding();
                 break;
             case JOINT:
+                run_joint();
+                break;
+            case JOINT_AFTER_REL:
                 run_relation();
-                _fixedLinks = new HashMap<>(_relationGraph);
+                _fixedRelationLinks = new HashMap<>(_relationGraph);
                 _relationGraph = new HashMap<>();
-                //run_grounding();
-                //_fixedLinks = new HashMap<>(_groundingGraph);
-                //_groundingGraph = new HashMap<>();
-                run_combined();
+                run_joint();
+                break;
+            case JOINT_AFTER_GRND:
+                run_grounding();
+                _fixedRelationLinks = new HashMap<>(_groundingGraph);
+                _groundingGraph = new HashMap<>();
+                run_joint();
                 break;
         }
 
         //If we failed to find a joint solution, find individual solutions
-        if(_type == ILPInference.InferenceType.JOINT && !_foundSolution){
+        if(_infType.toString().contains("JOINT") && !_foundSolution){
             _fallbackSolution = true;
             _relationGraph = new HashMap<>(); _groundingGraph = new HashMap<>();
             _resetSolver();
@@ -294,7 +321,11 @@ public class ILPSolverThread extends Thread {
 
         //Given that we know these are gold boxes, we must
         //assign a box to at least one mention
-        _addGroundingConstraint_boxExigence(groundingIndices);
+        if(_includeBoxExigence)
+            _addGroundingConstraint_boxExigence(groundingIndices);
+
+        if(_includeTypeConstraint)
+            _addGroundingConstraints_category(groundingIndices);
 
         //Solve the ILP
         solveGraph(null, groundingIndices);
@@ -303,7 +334,7 @@ public class ILPSolverThread extends Thread {
     /**
      * Sets up and runs the ILP solver for combined inference
      */
-    private void run_combined() {
+    private void run_joint() {
         int[][][] relationIndices = new int[_mentionList.size()][_mentionList.size()][_maxRelationLabel +1];
         int[][] groundingIndices = new int[_mentionList.size()][_boxList.size()];
         int[][] antiGroundingIndices = new int[_mentionList.size()][_boxList.size()];
@@ -353,7 +384,8 @@ public class ILPSolverThread extends Thread {
 
         //Given that we know these are gold boxes, we must
         //assign a box to at least one mention
-        _addGroundingConstraint_boxExigence(groundingIndices);
+        if(_includeBoxExigence)
+            _addGroundingConstraint_boxExigence(groundingIndices);
 
         //Solve the ILP
         solveGraph(relationIndices, groundingIndices);
@@ -402,11 +434,10 @@ public class ILPSolverThread extends Thread {
         return _solver.addBooleanVariable(score);
     }
 
-    /**
-     * Adds a boolean grounding variable to the internal
-     * solver, returning the variable's index; given pairID
-     * specifies the affinity score to look up when
-     * setting the boolean variable's coefficient
+    /**Adds a boolean grounding variable, returning the
+     * variable's index; given pairID specifies the
+     * affinity score to look up when setting the
+     * boolean variable's coefficient
      *
      * @param pairID
      * @return
@@ -420,6 +451,13 @@ public class ILPSolverThread extends Thread {
         return _solver.addBooleanVariable(score);
     }
 
+    /**Adds the anti-affinity variable, which is 1 when the affinity
+     * variable is 0 and 0 when affinity is 1
+     *
+     * @param pairID
+     * @param affinityIdx
+     * @return
+     */
     private int _addGroundingVariable_antiAffinity(String pairID, int affinityIdx)
     {
         double score = 0.0;
@@ -435,6 +473,12 @@ public class ILPSolverThread extends Thread {
         return antiAffinityIdx;
     }
 
+    /**Adds the cardinality variable, which is one only when a mention
+     * is ground to that many boxes
+     *
+     * @param mentionID
+     * @return
+     */
     private int[] _addGroundingVariable_cardinality(String mentionID)
     {
         int[] indices = new int[_boxList.size() + 1];
@@ -529,7 +573,7 @@ public class ILPSolverThread extends Thread {
         }
     }
 
-    /**Adds the relation transitivity constraints to the solver; includes
+    /**Adds the relation transitivity constraints; includes
      * sub/superset transitivity and entity consistency (implicitly including
      * coref transitive closure)
      *
@@ -550,7 +594,7 @@ public class ILPSolverThread extends Thread {
                     /* Subset Transitivity */
                     //If there exists an ij subset link, any subset link to/from k
                     //must hold for both i and j
-                    if(_maxRelationLabel >= 2){
+                    if(_includeSubset){
                         _solver.addLessThanConstraint(new int[]{linkIndices[i][j][2],
                                         linkIndices[j][k][2], linkIndices[i][k][2]},
                                 new double[]{1.0, 1.0, -1.0}, 1.0);
@@ -596,7 +640,7 @@ public class ILPSolverThread extends Thread {
     {
         //Don't bother going through the loops if we have no fixed links
         //to add
-        if(_fixedLinks.isEmpty())
+        if(_fixedRelationLinks.isEmpty())
            return;
 
         for(int i=0; i<_mentionList.size(); i++) {
@@ -607,21 +651,22 @@ public class ILPSolverThread extends Thread {
                 String id_ij = Document.getMentionPairStr(m_i, m_j);
                 String id_ji = Document.getMentionPairStr(m_j, m_i);
 
-                if (_fixedLinks.containsKey(id_ij)) {
+                if (_fixedRelationLinks.containsKey(id_ij)) {
                     double[] coeff = {0.0, 0.0, 0.0, 0.0};
-                    coeff[_fixedLinks.get(id_ij)] = 1.0;
+                    coeff[_fixedRelationLinks.get(id_ij)] = 1.0;
                     _solver.addEqualityConstraint(linkIndices[i][j], coeff, 1.0);
                 }
-                if (_fixedLinks.containsKey(id_ji)) {
+                if (_fixedRelationLinks.containsKey(id_ji)) {
                     double[] coeff = {0.0, 0.0, 0.0, 0.0};
-                    coeff[_fixedLinks.get(id_ji)] = 1.0;
+                    coeff[_fixedRelationLinks.get(id_ji)] = 1.0;
                     _solver.addEqualityConstraint(linkIndices[j][i], coeff, 1.0);
                 }
             }
         }
     }
 
-    /**Adds the pairwise relation constraints to the solver: if ij is coref, so must ji;
+
+    /**Adds the pairwise relation constraints: if ij is coref, so must ji;
      * if ij is sub, ji must be sup; if ij is sup, ji must be sub
      *
      * @param linkIndices_ij
@@ -638,7 +683,7 @@ public class ILPSolverThread extends Thread {
         //Enforce symmetry between coref / antisym between subset
         _solver.addEqualityConstraint(new int[]{linkIndices_ij[1],
                 linkIndices_ji[1]}, new double[]{1.0, -1.0}, 0.0);
-        if(_maxRelationLabel >= 3){
+        if(_includeSubset){
             _solver.addEqualityConstraint(new int[]{linkIndices_ij[2],
                     linkIndices_ji[3]}, new double[]{1.0, -1.0}, 0.0);
             _solver.addEqualityConstraint(new int[]{linkIndices_ij[3],
@@ -646,8 +691,10 @@ public class ILPSolverThread extends Thread {
         }
     }
 
-    /**Adds the grounding box exigence constraint to the solver; boxes must be associated
-     * with at least one mention
+    /**Adds the box exigence grounding constraint, which requires that each
+     * box must be associated with at least one mention
+     *
+     * @param linkIndices
      */
     private void _addGroundingConstraint_boxExigence(int[][] linkIndices)
     {
@@ -661,6 +708,13 @@ public class ILPSolverThread extends Thread {
         }
     }
 
+    /**Adds the cardinality grounding constraints, which in effect enable us to have
+     * a boolean variable for the current number of boxes, allowing us to add
+     * a given cardinality confience to the objective
+     *
+     * @param groundingLinks_perMention
+     * @param cardinalityLinks_perMention
+     */
     private void _addGroundingConstraint_cardinality(int[] groundingLinks_perMention,
                                                      int[] cardinalityLinks_perMention)
     {
@@ -706,11 +760,26 @@ public class ILPSolverThread extends Thread {
         _solver.addEqualityConstraint(cardinalityLinks_perMention, coeffs_z, 1.0);
     }
 
+    private void _addGroundingConstraints_category(int[][] groundingIndices)
+    {
+        for(int i=0; i<_mentionList.size(); i++){
+            Mention m_i = _mentionList.get(i);
+            for(int o=0; o<_boxList.size(); o++){
+                BoundingBox b_o = _boxList.get(o);
+                if(!_mentionCatDict.containsKey(m_i) ||
+                   !_mentionCatDict.get(m_i).contains(b_o.getCategory()))
+                    _solver.addEqualityConstraint(new int[]{groundingIndices[i][o]},
+                            new double[]{1.0}, 0.0);
+            }
+        }
+    }
+
     /* Graph methods */
 
-    /**Interprets the solver's boolean variables -- represented as
+    /**Stores the solver's boolean variables -- represented as
      * the given linkIndices -- as a relation graph
      *
+     * @param linkIndices
      */
     private void _saveRelationGraph(int[][][] linkIndices)
     {
@@ -742,7 +811,7 @@ public class ILPSolverThread extends Thread {
         }
     }
 
-    /**Interpret's the solver's boolean variables -- represented
+    /**Stores the solver's boolean variables -- represented
      * as the given linkIndices -- as a grounding graph
      *
      * @param linkIndices
@@ -760,15 +829,13 @@ public class ILPSolverThread extends Thread {
         }
     }
 
-    /**Returns the relation graph; assumes relation or combined inference
-     * has taken place
+    /**Returns the relation graph produced by relation or joint inference
      *
      * @return
      */
     public Map<String, Integer> getRelationGraph(){return _relationGraph;}
 
-    /**Returns the grounding graph; assumes grounding or combined inference
-     * has taken place
+    /**Returns the grounding graph produced by grounding or joint inference
      *
      * @return
      */

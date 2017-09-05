@@ -1,6 +1,7 @@
 package learn;
 
 import core.Minion;
+import core.Overlord;
 import org.apache.commons.lang.ArrayUtils;
 import out.OutTable;
 import statistical.ScoreDict;
@@ -10,8 +11,7 @@ import utilities.*;
 import java.io.File;
 import java.util.*;
 
-import static learn.ILPInference.InferenceType.JOINT;
-
+import static learn.ILPInference.InferenceType.*;
 
 /**The ILPInference class provides static
  * functions for computing and reporting the 
@@ -21,21 +21,19 @@ import static learn.ILPInference.InferenceType.JOINT;
  */
 public class ILPInference
 {
-    //private Map<String, Map<Mention, Map<Mention, Integer>>> _relationGraphs;
-    //private Map<String, Map<Mention, Map<BoundingBox, Integer>>> _groundingGraphs;
     private Map<String, Map<String, Integer>> _relationGraphs, _groundingGraphs;
     private Map<String, Document> _docDict;
     private Map<String, Set<Chain>> _predChains;
     private Set<String> _nonvisMentions;
-    private InferenceType _type;
+    private InferenceType _infType;
     private boolean _usePredictedNonvis;
     private Map<String, List<Mention>> _visualMentionDict;
     private Map<String, List<BoundingBox>> _boxDict;
-    private Map<String, double[]> _relationScores, _affinityScores, _cardinalityScores, _typeCosts;
+    private Map<String, double[]> _relationScores, _affinityScores, _cardinalityScores;
     private Set<String> _failedImgs, _fallbackImgs;
     private String _graphRoot;
     private DoubleDict<String> _groundingAccuracies, _relationAccuracies;
-    private int _maxRelationLabel;
+    private boolean _includeTypeConstr, _excludeBoxExigence, _excludeSubset;
 
     /**Creates a new ILPInference module, using the specified
      * docSet and nonvisual scores file; Performs combined inference
@@ -46,12 +44,28 @@ public class ILPInference
      * @param relationScoresFile
      * @param affinityScoresFile
      * @param cardinalityScoresFile
+     * @param graphRoot
+     * @param includeTypeConstr
+     * @param excludeBoxExigence
+     * @param excludeSubset
      */
-    public ILPInference(Collection<Document> docSet,
+    public ILPInference(Collection<Document> docSet, InferenceType infType,
                         String nonvisScoresFile, String relationScoresFile,
-                        String typeCostsFile, String affinityScoresFile,
-                        String cardinalityScoresFile, String graphRoot, double alpha)
+                        String affinityScoresFile, String cardinalityScoresFile,
+                        String graphRoot, boolean includeTypeConstr,
+                        boolean excludeBoxExigence, boolean excludeSubset)
     {
+        //If we're going to use the type constraint, intitialize
+        //the lexicons
+        _includeTypeConstr = includeTypeConstr;
+        if(_includeTypeConstr)
+            Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
+
+        _excludeBoxExigence = excludeBoxExigence;
+        _excludeSubset = excludeSubset;
+
+        _infType = infType;
+
         //If specified, load the last graph attempts
         _relationGraphs = new HashMap<>(); _groundingGraphs = new HashMap<>();
         _graphRoot = graphRoot;
@@ -71,24 +85,14 @@ public class ILPInference
         if(nonvisScoresFile != null){
             _usePredictedNonvis = true;
             _loadNonvisMentions(nonvisScoresFile);
-        }
 
-        if(relationScoresFile != null && affinityScoresFile != null && cardinalityScoresFile != null)
-            _type = InferenceType.JOINT;
-        else if(relationScoresFile != null)
-            _type = InferenceType.RELATION;
-        else if(affinityScoresFile != null && cardinalityScoresFile != null)
-            _type = InferenceType.GROUNDING;
+            //Evaluate the nonvis as well, because why not
+            Logger.log("Evaluating nonvis");
+            ClassifyUtil.evaluateNonvis(docSet, nonvisScoresFile);
+        }
 
         //Load and evaluate those scores files
         _loadAndEvalScores(relationScoresFile, affinityScoresFile, cardinalityScoresFile);
-
-        //Load the type cost scores file, if we have one
-        if(typeCostsFile != null)
-            _typeCosts = ClassifyUtil.readMccScoresFile(typeCostsFile);
-
-        //the default max label is 3
-        _maxRelationLabel = 3;
 
         //Store our visual mentions in accordance
         //with our nonvis scheme
@@ -109,7 +113,7 @@ public class ILPInference
         //store our bounding boxes unless this is a
         //relation inference object
         _boxDict = new HashMap<>();
-        if(_type != InferenceType.RELATION){
+        if(_infType != InferenceType.RELATION){
             for(Document d : _docDict.values()){
                 List<BoundingBox> boxes = new ArrayList<>(d.getBoundingBoxSet());
                 if(boxes.isEmpty())
@@ -118,16 +122,6 @@ public class ILPInference
             }
         }
     }
-
-    /**Sets each thread's max relation label, according to
-     * 0: null
-     * 1: coref
-     * 2: subset
-     * 3: superset
-     *
-     * @param maxRelationLabel
-     */
-    public void setMaxRelationLabel(int maxRelationLabel){_maxRelationLabel = maxRelationLabel;}
 
     /* File loading methods */
 
@@ -458,16 +452,6 @@ public class ILPInference
 
         System.out.printf("Found %d (%.2f%%) correctly grounded mentions\n",
                 (int)perfectMentions, 100.0 * perfectMentions / totalMentions);
-
-        /*
-        System.out.println("Interesting image accuracies");
-        for(String interestingID : _interestingDevImgs){
-            if(_docDict.containsKey(interestingID)){
-                System.out.println(interestingID + "\t" +
-                        scoreDict.get(_docDict.get(interestingID)).getAccuracy());
-            }
-        }*/
-
     }
 
     private void _evaluateRelations(Map<String, Integer> predLabelDict, String filename)
@@ -609,8 +593,6 @@ public class ILPInference
             }
         }
 
-
-
         //Additionally, let's evaluate to what the percentage of perfect
         //entities have been predicted
         Map<Document, Integer> correctEntityCounts = new HashMap<>();
@@ -694,27 +676,6 @@ public class ILPInference
 
         System.out.printf("Found %d (%.2f%%) correct entities\n",
                 (int)correctEntities, 100.0 * correctEntities / totalEntities);
-
-        /*
-        System.out.println("Interesting image accuracies");
-        for(String interestingID : _interestingDevImgs){
-            if(_docDict.containsKey(interestingID)){
-                System.out.println(interestingID + "\t" +
-                        docScoreDict.get(_docDict.get(interestingID)).getAccuracy());
-            }
-        }*/
-        /*
-        System.out.println("Best 10 images");
-        List<String> imgIds = entityAverages.getSortedByValKeys(true);
-        for(int i=0; i<Math.min(10, imgIds.size()); i++){
-            System.out.printf("%s : %.2f%%\n", imgIds.get(i), 100.0 * entityAverages.get(imgIds.get(i)));
-        }
-
-        System.out.println("Worst 10 images");
-        imgIds = entityAverages.getSortedByValKeys(false);
-        for(int i=0; i<Math.min(10, imgIds.size()); i++){
-            System.out.printf("%s : %.2f%%\n", imgIds.get(i), 100.0 * entityAverages.get(imgIds.get(i)));
-        }*/
     }
 
     /**Evaluates the predicted box cardinalities in the predLabelDict
@@ -757,14 +718,14 @@ public class ILPInference
      */
     public void evaluate(boolean exportFiles)
     {
-        if(_type == InferenceType.RELATION || _type == InferenceType.JOINT){
+        if(_infType == InferenceType.RELATION || _infType.toString().contains("JOINT")){
             Logger.log("Evaluating relation graphs");
             Map<String, Integer> predLabels = new HashMap<>();
             for(Map<String, Integer> labelDict : _relationGraphs.values())
                 labelDict.forEach((k,v) -> predLabels.put(k, v));
             _evaluateRelations(predLabels, "out/post_inf_rel");
         }
-        if(_type == InferenceType.GROUNDING || _type == InferenceType.JOINT){
+        if(_infType == GROUNDING || _infType.toString().contains("JOINT")){
             Logger.log("Evaluating grounding graphs");
             Map<String, Integer> predLabels = new HashMap<>();
             for(Map<String, Integer> labelDict : _groundingGraphs.values())
@@ -774,11 +735,11 @@ public class ILPInference
 
         if(exportFiles){
             //Export Relation files
-            if(_type == InferenceType.RELATION || _type == InferenceType.JOINT){
+            if(_infType == InferenceType.RELATION || _infType.toString().contains("JOINT")){
                 Logger.log("Exporting conll and latex files");
                 Map<String, Set<Chain>> docChainSetDict = getPredictedChains();
                 for(Document d : _docDict.values()){
-                    String corefCase = _type == InferenceType.RELATION ? "inf" : "joint";
+                    String corefCase = _infType == InferenceType.RELATION ? "inf" : "joint";
                     _exportConllFile(d, docChainSetDict.get(d.getID()), corefCase);
                     _exportRelationFile(d, docChainSetDict.get(d.getID()));
                 }
@@ -788,12 +749,12 @@ public class ILPInference
                 for(Document d : _docDict.values()){
                     FileIO.writeFile(HtmlIO.getImgHtm(d, docChainSetDict.get(d.getID()),
                             predSubsetChains.get(d.getID())),
-                            "out/" + _type.toString().toLowerCase() + "/htm/" +
+                            "out/" + _infType.toString().toLowerCase() + "/htm/" +
                             d.getID().replace(".jpg", ""), "htm", false);
                 }
             }
 
-            if (_type == InferenceType.GROUNDING || _type == InferenceType.JOINT) {
+            if (_infType == GROUNDING || _infType.toString().contains("JOINT")) {
                 Logger.log("Exporting grounding files");
                 Map<String, Integer> predLabels = new HashMap<>();
                 for(Map<String, Integer> labelDict : _groundingGraphs.values())
@@ -884,10 +845,12 @@ public class ILPInference
         }
 
         String outDir = "out/";
-        switch(_type){
+        switch(_infType){
             case RELATION: outDir += "relation/relation/";
                 break;
-            case JOINT: outDir += "joint/relation/";
+            case JOINT:
+            case JOINT_AFTER_GRND:
+                outDir += "joint/relation/";
                 break;
         }
         List<String> ll = new ArrayList<>();
@@ -946,58 +909,15 @@ public class ILPInference
             ll_pred.add(c.toLatexString(mentionBoxDict_pred) + "\\\\");
         }
 
-        /*
-        List<List<String>> groundingTable = new ArrayList<>();
-        List<String> cols = new ArrayList<>(); cols.add("");
-        List<Mention> mentions = d.getMentionList();
-        List<BoundingBox> boxes = new ArrayList<>(d.getBoundingBoxSet());
-        for(int j=0; j<mentions.size(); j++)
-            cols.add("m_" + mentions.get(j).getCaptionIdx() + "|" + mentions.get(j).getIdx());
-        groundingTable.add(cols);
-        for(int o=0; o<boxes.size(); o++){
-            List<String> row = new ArrayList<>(); row.add("b_" + o);
-            BoundingBox b = boxes.get(o);
-            Set<Mention> assocMentions = d.getMentionSetForBox(b);
-            for(int j=0; j<mentions.size(); j++){
-                Mention m = mentions.get(j);
-
-                boolean nonvisMention = m.getChainID().equals("0");
-                if (_usePredictedNonvis)
-                    nonvisMention = _nonvisMentions.contains(m.getUniqueID());
-
-                //if this is a nonvisual mention according to
-                //our scheme, it's always pred 0
-                int pred = 0;
-                if (!nonvisMention) {
-                    String id = m.getUniqueID() + "|" + b.getUniqueID();
-                    if (groundingPredLabelDict.containsKey(id))
-                        pred = groundingPredLabelDict.get(id);
-                }
-
-                String label = "";
-                if(assocMentions.contains(m))
-                    label += "g";
-                if(pred == 1){
-                    if(!label.isEmpty())
-                        label += "|";
-                    label += "p";
-                }
-                row.add(label);
-            }
-            groundingTable.add(row);
-        }*/
-
-
         String outDir = "out/";
-        switch(_type){
+        switch(_infType){
             case GROUNDING: outDir += "grounding/";
                 break;
-            case JOINT: outDir += "joint/grounding/";
+            case JOINT:
+            case JOINT_AFTER_REL:
+                outDir += "joint/grounding/";
                 break;
         }
-        /*
-        FileIO.writeFile(StringUtil.toTableStr(groundingTable),
-                outDir + d.getID().replace(".jpg", ""), "txt", false);*/
 
         List<String> ll = new ArrayList<>();
         ll.add("\\emph{Gold}\\\\");
@@ -1229,21 +1149,40 @@ public class ILPInference
      * @return
      */
     private ILPSolverThread _getNextThread(String docID,
-           Map<String, Integer> fixedLinks, boolean constrainTypes, int numSolverThreads)
+           Map<String, Integer> fixedLinks, int numSolverThreads)
     {
-        switch(_type){
-            case RELATION: return new ILPSolverThread(_visualMentionDict.get(docID),
-                    _relationScores, _typeCosts, fixedLinks, constrainTypes, _maxRelationLabel,
-                    numSolverThreads);
+        //Set up the basic thread
+        ILPSolverThread thread = null;
+        switch(_infType){
+            case RELATION: thread = new ILPSolverThread(_visualMentionDict.get(docID), numSolverThreads);
+                break;
             case GROUNDING:
-                return new ILPSolverThread(_visualMentionDict.get(docID),
-                    _boxDict.get(docID), _affinityScores, _cardinalityScores, false, numSolverThreads);
-            case JOINT: return new ILPSolverThread(_visualMentionDict.get(docID),
-                    _boxDict.get(docID), _relationScores, _typeCosts, _affinityScores,
-                    _cardinalityScores, fixedLinks, constrainTypes, _maxRelationLabel, false,
-                    numSolverThreads);
+            case JOINT:
+            case JOINT_AFTER_GRND:
+            case JOINT_AFTER_REL:
+                thread = new ILPSolverThread(_visualMentionDict.get(docID), _boxDict.get(docID),
+                    _infType, numSolverThreads);
         }
-        return null;
+
+        //Add the fixed links, if there are any
+        if(thread != null && fixedLinks != null && !fixedLinks.isEmpty())
+            thread.setFixedRelationLinks(fixedLinks);
+
+        if(_infType == RELATION || _infType.toString().contains("JOINT")){
+            thread.setRelationScores(_relationScores);
+            if(_excludeSubset)
+                thread.excludeSubset();
+        }
+        if(_infType == GROUNDING || _infType.toString().contains("JOINT")){
+            thread.setAffinityScores(_affinityScores);
+            thread.setCardinalityScores(_cardinalityScores);
+            if(_excludeBoxExigence)
+                thread.excludeBoxExigence();
+            if(_includeTypeConstr)
+                thread.includeTypeConstraint();
+        }
+
+        return thread;
     }
 
     /**Performs inference according to the internal type,
@@ -1251,16 +1190,15 @@ public class ILPInference
      * if applicable
      *
      * @param numThreads
-     * @param constrainTypes
      */
-    public void infer(int numThreads, boolean constrainTypes)
+    public void infer(int numThreads)
     {
         /* If this is a pairwise or combined inference, perform
          *  pronominal coreference resolution
          */
         Map<String, Set<String>> pronomCoref = new HashMap<>();
         Map<String, Map<String, Integer>> fixedCorefLinks = new HashMap<>();
-        if(_type == InferenceType.RELATION || _type == JOINT){
+        if(_infType == InferenceType.RELATION || _infType.toString().contains("JOINT")){
             Logger.log("Performing rule-based pronominal coreference");
             for(Document d : _docDict.values()){
                 Set<String> pronomPairs = ClassifyUtil.pronominalCoref(d,
@@ -1293,7 +1231,7 @@ public class ILPInference
         }
 
         /*Perform inference, according to our type*/
-        Logger.log("Solving the ILP for " + String.valueOf(_type) + " inference");
+        Logger.log("Solving the ILP for " + String.valueOf(_infType) + " inference");
         if((double)_relationGraphs.keySet().size()/(double)_visualMentionDict.keySet().size() > 0.9 ||
            (double)_groundingGraphs.keySet().size()/(double)_visualMentionDict.keySet().size() > 0.9){
             //If this is a run where most (>90%) of our documents have already
@@ -1302,16 +1240,16 @@ public class ILPInference
             List<String> docIds = new ArrayList<>(_visualMentionDict.keySet());
             docIds.removeAll(_relationGraphs.keySet());
             docIds.removeAll(_groundingGraphs.keySet());
-            _infer(docIds, fixedCorefLinks, constrainTypes, 1, numThreads);
-        } else if(_type == InferenceType.RELATION || _type == InferenceType.GROUNDING){
+            _infer(docIds, fixedCorefLinks, 1, numThreads);
+        } else if(_infType == InferenceType.RELATION || _infType == GROUNDING){
             //If this is simple relation or grounding, we can run one document
             //per thread, giving gurobi one thread, and itll be done relatively
             //quickly
             List<String> docIds = new ArrayList<>(_visualMentionDict.keySet());
             docIds.removeAll(_relationGraphs.keySet());
             docIds.removeAll(_groundingGraphs.keySet());
-            _infer(docIds, fixedCorefLinks, constrainTypes, numThreads, 1);
-        } else if(_type == InferenceType.JOINT){
+            _infer(docIds, fixedCorefLinks, numThreads, 1);
+        } else if(_infType.toString().contains("JOINT")){
             //If this is combined inference, however, we assume that we have a
             //number of threads that's divisible by four (I've been running these on
             //24 threads) and we're going to split the images into batches, based
@@ -1374,7 +1312,7 @@ public class ILPInference
                         complexityStr.toUpperCase(), docIds.size(),
                         numThreads_doc, numThreads_solver);
 
-                _infer(docIds, fixedCorefLinks, constrainTypes,
+                _infer(docIds, fixedCorefLinks,
                        numThreads_doc, numThreads_solver);
             }
         }
@@ -1382,7 +1320,7 @@ public class ILPInference
 
         //Finally, if this has been relation or combined inference,
         //convert our graphs to predicted chains
-        if(_type == InferenceType.RELATION || _type == InferenceType.JOINT){
+        if(_infType == InferenceType.RELATION || _infType.toString().contains("JOINT")){
             Map<String, Integer> predLabels = new HashMap<>();
             for(Map<String, Integer> labelDict : _relationGraphs.values())
                 labelDict.forEach((k,v) -> predLabels.put(k, v));
@@ -1398,14 +1336,14 @@ public class ILPInference
     }
 
     private void _infer(List<String> docIds, Map<String, Map<String, Integer>> fixedLinks,
-                        boolean constrainTypes, int numThreads_docs, int numThreads_solver)
+                        int numThreads_docs, int numThreads_solver)
     {
         int docIdx = 0, threadIdx = 0;
         Thread[] threadPool = new Thread[numThreads_docs];
         while(threadIdx < numThreads_docs && docIdx < docIds.size()){
             String docID = docIds.get(docIdx);
             threadPool[threadIdx] = _getNextThread(docID,
-                    fixedLinks.get(docID), constrainTypes, numThreads_solver);
+                    fixedLinks.get(docID), numThreads_solver);
             threadPool[threadIdx].start();
             docIdx++; threadIdx++;
         }
@@ -1445,7 +1383,7 @@ public class ILPInference
                     //dead one out for a live one
                     if(docIdx < docIds.size()) {
                         String docID = docIds.get(docIdx);
-                        threadPool[i] = _getNextThread(docID, fixedLinks.get(docID), constrainTypes, numThreads_solver);
+                        threadPool[i] = _getNextThread(docID, fixedLinks.get(docID), numThreads_solver);
                         threadPool[i].start();
                         foundLiveThread = true;
                         docIdx++;
@@ -1501,6 +1439,6 @@ public class ILPInference
      *
      */
     public enum InferenceType {
-        RELATION, GROUNDING, JOINT
+        RELATION, GROUNDING, JOINT, JOINT_AFTER_REL, JOINT_AFTER_GRND
     }
 }

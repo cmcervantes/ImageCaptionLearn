@@ -5,23 +5,23 @@
 # Apparently spaces inside elements are problematic, and there's an issue
 # with scp not copying a file - when passed as an arg - that
 # works fine when explicit
-scp -r ~/source/ImageCaptionLearn/src/ clgrad3:~/source/ImageCaptionLearn/staging_0/ >/dev/null
-scp ~/source/ImageCaptionLearn/pom.xml clgrad3:~/source/ImageCaptionLearn/staging_0/ >/dev/null
-scp ~/source/ImageCaptionLearn/build.sh clgrad3:~/source/ImageCaptionLearn/staging_0/ >/dev/null
-scp ~/source/ImageCaptionLearn/README clgrad3:~/source/ImageCaptionLearn/staging_0/ >/dev/null
-scp ~/source/ImageCaptionLearn/resetOut.sh clgrad3:~/source/ImageCaptionLearn/staging_0/ >/dev/null
+scp -r ~/source/ImageCaptionLearn/src/ clgrad5:~/source/ImageCaptionLearn/staging_0/ >/dev/null
+scp ~/source/ImageCaptionLearn/pom.xml clgrad5:~/source/ImageCaptionLearn/staging_0/ >/dev/null
+scp ~/source/ImageCaptionLearn/build.sh clgrad5:~/source/ImageCaptionLearn/staging_0/ >/dev/null
+scp ~/source/ImageCaptionLearn/README clgrad5:~/source/ImageCaptionLearn/staging_0/ >/dev/null
+scp ~/source/ImageCaptionLearn/resetOut.sh clgrad5:~/source/ImageCaptionLearn/staging_0/ >/dev/null
 
-scp -r ~/source/ImageCaptionLearn/src/ clgrad3:~/source/ImageCaptionLearn/staging_1/ >/dev/null
-scp ~/source/ImageCaptionLearn/pom.xml clgrad3:~/source/ImageCaptionLearn/staging_1/ >/dev/null
-scp ~/source/ImageCaptionLearn/build.sh clgrad3:~/source/ImageCaptionLearn/staging_1/ >/dev/null
-scp ~/source/ImageCaptionLearn/README clgrad3:~/source/ImageCaptionLearn/staging_1/ >/dev/null
-scp ~/source/ImageCaptionLearn/resetOut.sh clgrad3:~/source/ImageCaptionLearn/staging_1/ >/dev/null
+scp -r ~/source/ImageCaptionLearn/src/ clgrad5:~/source/ImageCaptionLearn/staging_1/ >/dev/null
+scp ~/source/ImageCaptionLearn/pom.xml clgrad5:~/source/ImageCaptionLearn/staging_1/ >/dev/null
+scp ~/source/ImageCaptionLearn/build.sh clgrad5:~/source/ImageCaptionLearn/staging_1/ >/dev/null
+scp ~/source/ImageCaptionLearn/README clgrad5:~/source/ImageCaptionLearn/staging_1/ >/dev/null
+scp ~/source/ImageCaptionLearn/resetOut.sh clgrad5:~/source/ImageCaptionLearn/staging_1/ >/dev/null
 
-scp -r ~/source/ImageCaptionLearn/src/ clgrad3:~/source/ImageCaptionLearn/staging_2/ >/dev/null
-scp ~/source/ImageCaptionLearn/pom.xml clgrad3:~/source/ImageCaptionLearn/staging_2/ >/dev/null
-scp ~/source/ImageCaptionLearn/build.sh clgrad3:~/source/ImageCaptionLearn/staging_2/ >/dev/null
-scp ~/source/ImageCaptionLearn/README clgrad3:~/source/ImageCaptionLearn/staging_2/ >/dev/null
-scp ~/source/ImageCaptionLearn/resetOut.sh clgrad3:~/source/ImageCaptionLearn/staging_2/ >/dev/null
+scp -r ~/source/ImageCaptionLearn/src/ clgrad5:~/source/ImageCaptionLearn/staging_2/ >/dev/null
+scp ~/source/ImageCaptionLearn/pom.xml clgrad5:~/source/ImageCaptionLearn/staging_2/ >/dev/null
+scp ~/source/ImageCaptionLearn/build.sh clgrad5:~/source/ImageCaptionLearn/staging_2/ >/dev/null
+scp ~/source/ImageCaptionLearn/README clgrad5:~/source/ImageCaptionLearn/staging_2/ >/dev/null
+scp ~/source/ImageCaptionLearn/resetOut.sh clgrad5:~/source/ImageCaptionLearn/staging_2/ >/dev/null
 
 
 
