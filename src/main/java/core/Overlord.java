@@ -103,6 +103,10 @@ public class Overlord
         String[] featOpts = {"relation", "affinity", "nonvis", "card"};
         parser.setArgument_opts("--extractFeats", featOpts, null,
                 "Extracts features to --out", "Data");
+        parser.setArgument_flag("--for_neural", "Whether extracted features are to be "+
+                                "used in conjunction with word embeddings in a neural "+
+                                "network (in practice, turns off various high-dim features)",
+                                "Data");
         parser.setArgument_flag("--exclude_subset", "Whether to exclude the subset label "+
                 "during relation feature extraction", "Data");
         parser.setArgument_flag("--exclude_partof", "Whether to exclude the partOf label "+
@@ -233,8 +237,58 @@ public class Overlord
             } else if(parser.getBoolean("mod_subset")){
                 Minion.export_modSubsetFeats(docSet, split);
             } else {
-                Preprocess.export_neuralRelationFiles(docSet,
-                        Overlord.dataPath + "tacl201708/nn/" + dataset + "_" + split);
+
+
+                Preprocess.export_phraseLocalization_affinityLists(docSet, "trainAsDev", Overlord.dataPath +
+                        "tacl201708/nn/bryan_affinity/" + dataset + "_trainAsDev");
+
+                /*
+                Preprocess.export_relationLabelFile(docSet, Overlord.dataPath +
+                        "tacl201708/nn/" + dataset + "_" + split + "_relationLabels");
+                System.exit(0);*/
+
+                /*
+                Preprocess.export_neuralRelationFiles(docSet, Overlord.dataPath +
+                    "tacl201708/nn/" + dataset + "_" + split);*/
+
+                System.exit(0);
+
+                // Julia:   "What percentage of the intra-caption pronominal links
+                //          in the training data have been manually corrected?"
+                DoubleDict<String> intraLinkHist = new DoubleDict<>();
+                for(Document d : docSet){
+                    boolean isReviewed = d.reviewed;
+                    for(Caption c : d.getCaptionList()){
+                        List<Mention> mentions = c.getMentionList();
+                        for(Mention m : mentions){
+                            String label = isReviewed ? "reviewed" : "orig";
+                            if(m.getPronounType() == Mention.PRONOUN_TYPE.NONE ||
+                               m.getPronounType() == Mention.PRONOUN_TYPE.SEMI){
+                                label = "nonpronom_" + label;
+                            } else {
+                                label = "pronom_" + label;
+                            }
+                            intraLinkHist.increment(label, mentions.size() - 1);
+                        }
+                    }
+                }
+                double totalIntraLinks = intraLinkHist.getSum();
+                for(String key : intraLinkHist.keySet())
+                    intraLinkHist.divide(key, totalIntraLinks);
+                System.out.println(intraLinkHist);
+                System.exit(0);
+
+
+                Preprocess.export_phraseLocalization_affinityLists(docSet, "trainAsDev", Overlord.dataPath +
+                        "tacl201708/nn/bryan_affinity/" + dataset + "_trainAsDev");
+                System.exit(0);
+
+
+                List<Document> docList = new ArrayList<>(docSet);
+                Collections.shuffle(docList);
+                Preprocess.export_neuralRelationFiles(docList.subList(0,
+                        (int)(0.2*docSet.size())), Overlord.dataPath +
+                        "tacl201708/nn/" + dataset + "_" + split + "_tune");
                 System.exit(0);
 
 
@@ -1187,32 +1241,6 @@ public class Overlord
                 }*/
 
 
-
-                for(Document d : docSet){
-                    //predict the document as a stanford-parsed object
-                    String text = "";
-                    for(Caption c : d.getCaptionList())
-                        text += c.toString() + " ";
-                    text = text.trim();
-                    Document d_stanford = stanfordAnno.annotate(d.getID(), text);
-
-                    String outDir = "out/stanford/";
-
-                    //Write the key file
-                    List<String> lineList_key = d.toConll2012();
-                    lineList_key.add(0, "#begin document (" + d.getID() + "); part 000");
-                    lineList_key.add("#end document");
-                    FileIO.writeFile(lineList_key, outDir +
-                            d.getID().replace(".jpg", "") + "_key", "conll", false);
-
-                    //Write the response file
-                    List<String> lineList_resp = d_stanford.toConll2012();
-                    lineList_resp.add(0, "#begin document (" + d.getID() + "); part 000");
-                    lineList_resp.add("#end document");
-                    FileIO.writeFile(lineList_resp, outDir +
-                            d.getID().replace(".jpg", "") + "_response", "conll", false);
-                }
-
                 System.exit(0);
 
                 Minion.export_cocoCategoryStats_coverage(docSet);
@@ -1658,6 +1686,7 @@ public class Overlord
             } else if(featsToExtract != null){
                 if(featsToExtract.equals("relation")){
                     ClassifyUtil.exportFeatures_relation(docSet, _outroot, numThreads,
+                            parser.getBoolean("for_neural"),
                             !parser.getBoolean("exclude_subset"),
                             !parser.getBoolean("exclude_partof"),
                             parser.getBoolean("include_cardinality"),
@@ -1693,6 +1722,21 @@ public class Overlord
             String relationFile = parser.getString("relation_scores");
             String affinityFile = parser.getString("affinity_scores");
             String cardinalityFile = parser.getString("cardinality_scores");
+
+            //DELETEME
+            //Alter the docset to only include the rando test docs
+            List<String> ll_tuneCaps = FileIO.readFile_lineList(Overlord.dataPath +
+                    "tacl201708/nn/flickr30k_dev_tune_captions.txt");
+            Set<String> tuneDocIDs = new HashSet<>();
+            for(String tuneCap : ll_tuneCaps){
+                String[] capIdSplit = tuneCap.split("\t");
+                tuneDocIDs.add(capIdSplit[0].split("#")[0]);
+            }
+            Set<Document> docsToKeep = new HashSet<>();
+            for(Document d : docSet)
+                if(tuneDocIDs.contains(d.getID()))
+                    docsToKeep.add(d);
+            docSet = docsToKeep;
 
             //Set up the relation inference module
             ILPInference inf = null;

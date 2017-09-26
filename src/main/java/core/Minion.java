@@ -1014,57 +1014,6 @@ public class Minion
         }
     }
 
-    public static void export_bryanPreproc_coco(Collection<Document> docSet)
-    {
-        String boxFeatFile = Overlord.dataPath + "mscoco/chrisCOCOFeats.csv";
-        Logger.log("Loading box features from <%s>", boxFeatFile);
-        Set<String> docIDs = new HashSet<>();
-        Map<String, FeatureVector> boxFeatures = new HashMap<>();
-        for(String[] row : FileIO.readFile_table(boxFeatFile)){
-            String docID = row[0].replace("COCO_train2014_", "");
-            docIDs.add(docID);
-            int boxIdx = Integer.parseInt(row[1]);
-            FeatureVector fv = new FeatureVector();
-            for(int i=2; i<row.length; i++)
-                fv.addFeature(i-1, Double.parseDouble(row[i]));
-            boxFeatures.put(docID + ";box:" + boxIdx, fv);
-        }
-
-        Logger.log("Retaining only relevant documents");
-        Collection<Document> docSubset = new HashSet<>();
-        for(Document d : docSet)
-            if(docIDs.contains(d.getID()))
-                docSubset.add(d);
-
-        Logger.log("Storing in-order lists of box feats, mention strings, and ids");
-        List<String> ll_img = new ArrayList<>();
-        List<String> ll_txt = new ArrayList<>();
-        List<String> ll_ids = new ArrayList<>();
-        int docIdx = 0;
-        for(Document d : docSubset){
-            for(Mention m : d.getMentionList()){
-                String normText = m.toString().toLowerCase().trim();
-                for(BoundingBox b : d.getBoundingBoxSet()){
-                    FeatureVector fv = boxFeatures.get(b.getUniqueID());
-                    if(fv == null){
-                        Logger.log(new Exception("Found no box features for " + b.getUniqueID()));
-                    } else {
-                        ll_img.add(StringUtil.listToString(fv.toDenseVector(), ","));
-                        ll_txt.add(normText);
-                        ll_ids.add(m.getUniqueID() + "|" + b.getUniqueID());
-                    }
-                }
-            }
-
-            docIdx++;
-            Logger.logStatus("Completed %.2f%%", 100.0 * docIdx / docSet.size());
-        }
-
-        FileIO.writeFile(ll_img, Overlord.dataPath + "feats/img_coco_train_sub", "csv", false);
-        FileIO.writeFile(ll_txt, Overlord.dataPath + "feats/txt_coco_train_sub", "txt", false);
-        FileIO.writeFile(ll_ids, Overlord.dataPath + "feats/ids_coco_train_sub", "txt", false);
-    }
-
     public static double getAttrOverlap(AttrStruct root1, AttrStruct root2, String attrName)
     {
         double overlap = 0.0;

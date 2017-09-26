@@ -74,6 +74,8 @@ public abstract class ClassifyUtil {
     private static Map<String, Integer> _pronounTypes;
     private static Map<String, Integer> _dets;
     private static Map<String, Integer> _nonvisuals;
+    private static Map<String, Integer> _distances;
+
 
     protected static final String pattern_aside = "^NP , (NP (VP |ADJP |PP |and )*)+,.*$";
 
@@ -310,6 +312,12 @@ public abstract class ClassifyUtil {
         _quantifiers_kv.put("multiple", 2);
         _quantifiers_kv.put("a few", 2);
         _quantifiers_kv.put("some", 2);
+
+        _distances = new HashMap<>();
+        _distances.put("null", 0);
+        for(int i=1; i<11; i++)
+            _distances.put(String.valueOf(i), i);
+        _distances.put(">10", 11);
     }
 
     /**Exports relation features to outroot.feats, using the given collection of
@@ -323,9 +331,9 @@ public abstract class ClassifyUtil {
      * @param includePartOf Whether to include the partOf label (4)
      */
     public static void exportFeatures_relation(Collection<Document> docSet, String outroot,
-                                               int numThreads, boolean includeSubset,
-                                               boolean includePartOf, boolean includeCard,
-                                               String cardFile)
+                                               int numThreads, boolean forNeural,
+                                               boolean includeSubset, boolean includePartOf,
+                                               boolean includeCard, String cardFile)
     {
         //One of the problems we've run into is accounting for
         //the exact number of feature vectors we expect, how many we process,
@@ -393,8 +401,9 @@ public abstract class ClassifyUtil {
         int docIdx = 0;
         for(int i=0; i<numThreads; i++) {
             Document d = docList.get(docIdx);
-            threadPool[i] = new RelationExtractionThread(d, includeSubset, includePartOf,
-                    includeCard, cardinalityScores.get(d.getID()));
+            threadPool[i] = new RelationExtractionThread(d, forNeural,
+                    includeSubset, includePartOf, includeCard,
+                    cardinalityScores.get(d.getID()));
             docIdx++;
         }
 
@@ -436,8 +445,9 @@ public abstract class ClassifyUtil {
                         Logger.logStatus("Processed %d images (%.2f%%)",
                                 docIdx, 100.0*(double)docIdx / docList.size());
                         Document d = docList.get(docIdx);
-                        threadPool[i] = new RelationExtractionThread(d, includeSubset, includePartOf,
-                                includeCard, cardinalityScores.get(d.getID()));
+                        threadPool[i] = new RelationExtractionThread(d, forNeural,
+                                includeSubset, includePartOf, includeCard,
+                                cardinalityScores.get(d.getID()));
                         docIdx++;
                         threadPool[i].start();
                         foundLiveThread = true;
@@ -909,6 +919,29 @@ public abstract class ClassifyUtil {
         }
     }
 
+
+    public static void exportPronomConll(Collection<Document> docSet, boolean predictPronom)
+    {
+        String outDir = "out/pronom/";
+        for(Document d : docSet) {
+            Set<Chain> predChainSet = pronominalCorefChains(d, predictPronom);
+
+            //Write the key file
+            List<String> lineList_key = d.toConll2012();
+            lineList_key.add(0, "#begin document (" + d.getID() + "); part 000");
+            lineList_key.add("#end document");
+            FileIO.writeFile(lineList_key, outDir +
+                    d.getID().replace(".jpg", "") + "_key", "conll", false);
+
+            //Write the response file
+            List<String> lineList_resp = Document.toConll2012(d, predChainSet);
+            lineList_resp.add(0, "#begin document (" + d.getID() + "); part 000");
+            lineList_resp.add("#end document");
+            FileIO.writeFile(lineList_resp, outDir +
+                    d.getID().replace(".jpg", "") + "_response", "conll", false);
+        }
+    }
+
     /**Exports the box-mention affinity features into a single file;
      * all vectors are returned for dev/text, but -- for train --
      * a random sampling of 10 mention-box pairs are given, per mention text
@@ -1345,6 +1378,62 @@ public abstract class ClassifyUtil {
             }
         }
         return corefPairs;
+    }
+
+    public static Set<Chain> pronominalCorefChains(Document d, boolean predictPronom)
+    {
+        Map<Mention, String> mentionChainDict = new HashMap<>();
+
+        //Get the visual, nonpronominal mentions for this document
+        List<Mention> mentions = d.getMentionList();
+        Set<Mention> visualMentions = new HashSet<>();
+        for(Mention m : mentions)
+            if(m.getPronounType() == Mention.PRONOUN_TYPE.NONE && !m.getChainID().equals("0"))
+                visualMentions.add(m);
+
+        //Perform coref
+        if(predictPronom){
+            Set<String> pronomCorefPairs = ClassifyUtil.pronominalCoref(d, visualMentions);
+
+            //Get the actual chain associations, given those pairs
+            for(int i=0; i<mentions.size(); i++){
+                Mention m_i = mentions.get(i);
+                for(int j=i+1; j<mentions.size(); j++){
+                    Mention m_j = mentions.get(j);
+                    String id_ij = Document.getMentionPairStr(m_i, m_j);
+                    String id_ji = Document.getMentionPairStr(m_j, m_i);
+                    if(pronomCorefPairs.contains(id_ij) || pronomCorefPairs.contains(id_ji)) {
+                        if(m_i.getPronounType() != Mention.PRONOUN_TYPE.NONE &&
+                                m_i.getPronounType() != Mention.PRONOUN_TYPE.SEMI)
+                            mentionChainDict.put(m_i, m_j.getChainID());
+                        else
+                            mentionChainDict.put(m_j, m_i.getChainID());
+                    }
+                }
+            }
+        }
+
+        //For every nonpronominal mention, add its chain; unassociated
+        //pronouns should have no chain (for this comparison)
+        for(int i=0; i<mentions.size(); i++){
+            Mention m = mentions.get(i);
+            if(!mentionChainDict.containsKey(m) && !m.getChainID().equals("0") &&
+                    (m.getPronounType() == Mention.PRONOUN_TYPE.SEMI ||
+                            m.getPronounType() == Mention.PRONOUN_TYPE.NONE)){
+                mentionChainDict.put(m, m.getChainID());
+            }
+        }
+
+        //Construct predicted chains
+        Map<String, Set<Mention>> predChainDict = Util.invertMap(mentionChainDict);
+        Set<Chain> predChainSet = new HashSet<>();
+        for(String chainID : predChainDict.keySet()){
+            Chain c = new Chain(d.getID(), chainID);
+            for(Mention m : predChainDict.get(chainID))
+                c.addMention(m);
+            predChainSet.add(c);
+        }
+        return predChainSet;
     }
 
     /**Performs attribute attachment, associating animate mentions (as keys) with
@@ -1792,12 +1881,15 @@ public abstract class ClassifyUtil {
     private static class RelationExtractionThread extends Thread
     {
         private static Map<String, Object> _metaDict = new HashMap<>();
+        private static final String[] _identityTerms = {"to be", "like"};
         private Document _doc;
         private Set<String> _subsetMentions;
         private Set<String> _partOfMentions;
         private Map<String, double[]> _cardScores;
         private boolean _includeCard;
+        private boolean _forNeural;
         Collection<FeatureVector> fvSet;
+
 
         /**Initializes a RelationExtractionThread, which extracts
          * features for relation prediction for the given
@@ -1808,14 +1900,29 @@ public abstract class ClassifyUtil {
          * @param includeSubset Whether to include the subset label (2/3)
          * @param includePartOf Whether to include the partOf label (4)
          */
-        RelationExtractionThread(Document doc, boolean includeSubset, boolean includePartOf,
-                                 boolean includeCard, Map<String, double[]> cardScores)
+        RelationExtractionThread(Document doc, boolean forNeural, boolean includeSubset,
+                                 boolean includePartOf, boolean includeCard,
+                                 Map<String, double[]> cardScores)
+        {
+            init(doc, forNeural, includeSubset, includePartOf,
+                 includeCard, cardScores);
+        }
+
+        RelationExtractionThread(Document doc, boolean forNeural)
+        {
+            init(doc, forNeural, true, false, false, null);
+        }
+
+        private void init(Document doc, boolean forNeural, boolean includeSubset,
+                          boolean includePartOf, boolean includeCard,
+                          Map<String, double[]> cardScores)
         {
             _doc = doc;
             fvSet = new HashSet<>();
             _subsetMentions = new HashSet<>();
             _partOfMentions = new HashSet<>();
             _includeCard = includeCard;
+            _forNeural = forNeural;
 
             //Vary what we load into memory based on the labeling scheme
             if(includeSubset)
@@ -1857,7 +1964,8 @@ public abstract class ClassifyUtil {
             for(int i=0; i<mentionList.size(); i++){
                 Mention m_i = mentionList.get(i);
                 Mention.PRONOUN_TYPE type_i = m_i.getPronounType();
-                if(type_i == Mention.PRONOUN_TYPE.NONE || type_i == Mention.PRONOUN_TYPE.SEMI){
+                if(_forNeural || type_i == Mention.PRONOUN_TYPE.NONE ||
+                   type_i == Mention.PRONOUN_TYPE.SEMI){
                     //if this is a training document, don't bother training with
                     //nonvisual mentions
                     if(_doc.getIsTrain() && m_i.getChainID().equals("0"))
@@ -1866,7 +1974,8 @@ public abstract class ClassifyUtil {
                     for(int j=i+1; j<mentionList.size(); j++){
                         Mention m_j = mentionList.get(j);
                         Mention.PRONOUN_TYPE type_j = m_j.getPronounType();
-                        if(type_j == Mention.PRONOUN_TYPE.NONE || type_j == Mention.PRONOUN_TYPE.SEMI){
+                        if(_forNeural || type_j == Mention.PRONOUN_TYPE.NONE ||
+                           type_j == Mention.PRONOUN_TYPE.SEMI){
                             if(_doc.getIsTrain() && m_j.getChainID().equals("0"))
                                 continue;
 
@@ -1891,16 +2000,18 @@ public abstract class ClassifyUtil {
             List<Object> featureList = new ArrayList<>();
 
             //Caption match
-            Integer f_capMatch = m1.getCaptionIdx() == m2.getCaptionIdx() ? 1 : 0;
-            featureList.add(f_capMatch);
-            _addMetaEntry("caption_match", currentIdx++, _metaDict);
+            if(!_forNeural){
+                Integer f_capMatch = m1.getCaptionIdx() == m2.getCaptionIdx() ? 1 : 0;
+                featureList.add(f_capMatch);
+                _addMetaEntry("caption_match", currentIdx++, _metaDict);
+            }
 
             //caption match _and_ m_i < m_j / m_j < m_i
             Integer f_ante_ij = 0;
             if(m1.getCaptionIdx() == m2.getCaptionIdx() && m1.getIdx() < m2.getIdx())
                 f_ante_ij = 1;
             featureList.add(f_ante_ij);
-            _addMetaEntry("antecedent_ij", currentIdx++, _metaDict);
+            _addMetaEntry("precede_ij", currentIdx++, _metaDict);
 
             //Head matches
             String head_1 = m1.getHead().toString().toLowerCase();
@@ -2209,6 +2320,58 @@ public abstract class ClassifyUtil {
             _addMetaEntry("in_list_i", currentIdx++, _metaDict);
             _addMetaEntry("in_list_j", currentIdx++, _metaDict);
 
+            //neural features, meant to encode the rule based pronominal coref
+            if(_forNeural) {
+                int f_isAnimate_i = m1.getLexicalType().contains("people") ||
+                        m1.getLexicalType().contains("animals") ? 1 : 0;
+                int f_isAnimate_j = m2.getLexicalType().contains("people") ||
+                        m2.getLexicalType().contains("animals") ? 1 : 0;
+                featureList.add(f_isAnimate_i);
+                featureList.add(f_isAnimate_j);
+                _addMetaEntry("isAnimate_i", currentIdx++, _metaDict);
+                _addMetaEntry("isAnimate_j", currentIdx++, _metaDict);
+                int f_isThat_i = m1.toString().equalsIgnoreCase("that") ? 1 : 0;
+                int f_isThat_j = m2.toString().equalsIgnoreCase("that") ? 1 : 0;
+                featureList.add(f_isThat_i);
+                featureList.add(f_isThat_j);
+                _addMetaEntry("isThat_i", currentIdx++, _metaDict);
+                _addMetaEntry("isThat_j", currentIdx++, _metaDict);
+
+                int f_iToBej = FALSE;
+                int f_iOfj = FALSE;
+                if (m1.getCaptionIdx() == m2.getCaptionIdx() && m1.getIdx() < m2.getIdx()) {
+                    List<Chunk> interstitialChunks =
+                            _doc.getCaption(m1.getCaptionIdx()).getInterstitialChunks(m1, m2);
+                    List<Token> interstitialTokens =
+                            _doc.getCaption(m1.getCaptionIdx()).getInterstitialTokens(m1, m2);
+                    if (interstitialChunks.size() == 1) {
+                        String intrstlChunkType = interstitialChunks.get(0).getChunkType();
+                        String intrstlChunkStr = interstitialChunks.get(0).toString().toLowerCase();
+                        f_iToBej = intrstlChunkType.equals("VP") &&
+                                (StringUtil.containsElement(Arrays.asList(_identityTerms), intrstlChunkStr) ||
+                                        intrstlChunkStr.equals("is") || intrstlChunkStr.equals("are")) ? TRUE : FALSE;
+                    }
+                    if (interstitialTokens.size() == 1 &&
+                            interstitialTokens.get(0).toString().equalsIgnoreCase("of")) {
+                        f_iOfj = TRUE;
+                    }
+                }
+                featureList.add(f_iToBej);
+                featureList.add(f_iOfj);
+                _addMetaEntry("iToBej", currentIdx++, _metaDict);
+                _addMetaEntry("iOfj", currentIdx++, _metaDict);
+
+                int f_isFirstInCap_i = m1.getIdx() == 0 ? TRUE : FALSE;
+                int f_isFirstInCap_j = m2.getIdx() == 0 ? TRUE : FALSE;
+                int f_adjacent_ij = m1.getCaptionIdx() == m2.getCaptionIdx() &&
+                                    m1.getIdx() + 1 == m2.getIdx() ? TRUE : FALSE;
+                featureList.add(f_isFirstInCap_i);
+                featureList.add(f_isFirstInCap_j);
+                featureList.add(f_adjacent_ij);
+                _addMetaEntry("isFirstInCap_i", currentIdx++, _metaDict);
+                _addMetaEntry("isFirstInCap_j", currentIdx++, _metaDict);
+                _addMetaEntry("adjacent_ij", currentIdx++, _metaDict);
+            }
 
             //new subset features
             int f_hasArticle_i = _articles.contains(m1.getTokenList().get(0).toString().toLowerCase()) ? TRUE : FALSE;
@@ -2288,7 +2451,7 @@ public abstract class ClassifyUtil {
             }
 
             //Cardinality features
-            if(_includeCard){
+            if(!_forNeural && _includeCard){
                 for(int i=0; i<12; i++){
                     featureList.add(_cardScores.get(m1.getUniqueID())[i]);
                     featureList.add(_cardScores.get(m2.getUniqueID())[i]);
@@ -2297,12 +2460,10 @@ public abstract class ClassifyUtil {
                 }
             }
 
-            //Meta features
-            Integer f_headNotLemma = f_headMatch == TRUE && f_lemmaMatch == FALSE ? TRUE : FALSE;
+            //Meta features; recall that head_not_lemma, while
+            //providing symmetry, doesn't actually make sense
             Integer f_lemmaNotHead = f_lemmaMatch == TRUE && f_headMatch == FALSE ? TRUE : FALSE;
-            featureList.add(f_headNotLemma);
             featureList.add(f_lemmaNotHead);
-            _addMetaEntry("head_not_lemma", currentIdx++, _metaDict);
             _addMetaEntry("lemma_not_head", currentIdx++, _metaDict);
 
             //Add all features to the vector
@@ -2344,41 +2505,64 @@ public abstract class ClassifyUtil {
             if(right_prep_1 != null && right_prep_2 != null)
                 rightPrepPair = right_prep_1 + "|" + right_prep_2;
 
+            String distance_ij = "null";
+            if(m1.getCaptionIdx() == m2.getCaptionIdx()){
+                int dist = m2.getIdx() - m1.getIdx();
+                if(0 < dist && dist <= 10)
+                    distance_ij = String.valueOf(dist);
+                else if(dist > 10)
+                    distance_ij = ">10";
+            }
+
             //Add one hot vectors, which internally adjust the feature vector but
             //doesn't adjust the idx
-            currentIdx = _addOneHotVector(headPair, fv, currentIdx,
-                    _headPairs, "head_pair_onehot", _metaDict);
-            currentIdx = _addOneHotVector(lemmaPair, fv, currentIdx,
-                    _lemmaPairs, "lemma_pair_onehot", _metaDict);
+            if(!_forNeural){
+                currentIdx = _addOneHotVector(headPair, fv, currentIdx,
+                        _headPairs, "head_pair_onehot", _metaDict);
+                currentIdx = _addOneHotVector(lemmaPair, fv, currentIdx,
+                        _lemmaPairs, "lemma_pair_onehot", _metaDict);
+                currentIdx = _addOneHotVector(subjOfPair, fv, currentIdx,
+                        _subjOfPairs, "subj_of_onehot", _metaDict);
+                currentIdx = _addOneHotVector(objOfPair, fv, currentIdx,
+                        _objOfPairs, "obj_of_onehot", _metaDict);
+                currentIdx = _addOneHotVector(firstWord_1, fv, currentIdx,
+                        _dets, "det_1_onehot", _metaDict);
+                currentIdx = _addOneHotVector(firstWord_2, fv, currentIdx,
+                        _dets, "det_2_onehot", _metaDict);
+                currentIdx = _addOneHotVector(numericPair, fv, currentIdx,
+                        _numericPairs, "numeric_pair_onehot", _metaDict);
+                currentIdx = _addOneHotVector(modPair, fv, currentIdx,
+                        _modifierPairs, "modifier_pair_onehot", _metaDict);
+                currentIdx = _addOneHotVector(leftPrepPair, fv, currentIdx,
+                        _prepositionPairs, "left_preposition_pair_onehot", _metaDict);
+                currentIdx = _addOneHotVector(rightPrepPair, fv, currentIdx,
+                        _prepositionPairs, "right_preposition_pair_onehot", _metaDict);
+                currentIdx = _addOneHotVector(distance_ij, fv, currentIdx,
+                        _distances, "distance_ij", _metaDict);
+            }
             currentIdx = _addOneHotVector(typePair, fv, currentIdx,
                     _typePairs, "lex_type_pair_onehot", _metaDict);
             currentIdx = _addOneHotVector(leftPair, fv, currentIdx,
                     _leftPairs, "left_pair_onehot", _metaDict);
             currentIdx = _addOneHotVector(rightPair, fv, currentIdx,
                     _rightPairs, "right_pair_onehot", _metaDict);
-            currentIdx = _addOneHotVector(subjOfPair, fv, currentIdx,
-                    _subjOfPairs, "subj_of_onehot", _metaDict);
-            currentIdx = _addOneHotVector(objOfPair, fv, currentIdx,
-                    _objOfPairs, "obj_of_onehot", _metaDict);
-            currentIdx = _addOneHotVector(firstWord_1, fv, currentIdx,
-                    _dets, "det_1_onehot", _metaDict);
-            currentIdx = _addOneHotVector(firstWord_2, fv, currentIdx,
-                    _dets, "det_2_onehot", _metaDict);
-            currentIdx = _addOneHotVector(numericPair, fv, currentIdx,
-                    _numericPairs, "numeric_pair_onehot", _metaDict);
-            currentIdx = _addOneHotVector(modPair, fv, currentIdx,
-                    _modifierPairs, "modifier_pair_onehot", _metaDict);
-            currentIdx = _addOneHotVector(leftPrepPair, fv, currentIdx,
-                    _prepositionPairs, "left_preposition_pair_onehot", _metaDict);
-            currentIdx = _addOneHotVector(rightPrepPair, fv, currentIdx,
-                    _prepositionPairs, "right_preposition_pair_onehot", _metaDict);
             currentIdx = _addOneHotVector(cocoCat_1 + "|" + cocoCat_2, fv, currentIdx,
                     _categoryPairs, "categoryPair_onehot", _metaDict);
+            if(_forNeural){
+                String pronomType_i = m1.getPronounType().toString();
+                currentIdx = _addOneHotVector(pronomType_i, fv, currentIdx,
+                        _pronounTypes, "pronoun_type_i_onehot", _metaDict);
+                String pronomType_j = m1.getPronounType().toString();
+                currentIdx = _addOneHotVector(pronomType_j, fv, currentIdx,
+                        _pronounTypes, "pronoun_type_j_onehot", _metaDict);
+            }
 
             //We treat hypernyms as -- not a onehot -- but a bag-of-words;
             //Given core concepts, we keep a vector where entry ij
             //is 1 if one of the mentions has concept i in its senses hypernyms
             //and the other has concept j
+            //UPDATE: This never worked very well; toss if
+            /*
             int start = currentIdx;
             Set<String> hypSet_1 = _hypDict.get(lemma_1);
             Set<String> hypSet_2 = _hypDict.get(lemma_2);
@@ -2394,8 +2578,9 @@ public abstract class ClassifyUtil {
                 }
             }
             _addMetaEntry("hypernym_bow", start, currentIdx, _metaDict);
+            */
 
-            //Finally, add a three-way label indicating if these mentions are
+            //Finally, add a four-way label indicating if these mentions are
             //coreferent, subset, or null\
             Integer label = 0;
             if(!m1.getChainID().equals("0") && !m2.getChainID().equals("0")){
