@@ -584,12 +584,15 @@ public class ILPSolverThread extends Thread {
         //Iterate through all the links (assuming we have all our variables set up)
         //and set the transitivity / consistency constraints
         for(int i=0; i<_mentionList.size(); i++){
+            Mention m_i = _mentionList.get(i);
             for(int j=i+1; j<_mentionList.size(); j++){
+                Mention m_j = _mentionList.get(j);
                 for(int k=0; k<_mentionList.size(); k++){
                     //We consider the ij / ji pair along with each mention
                     //k with which ij could have a relation
                     if(k == i || k == j)
                         continue;
+                    Mention m_k = _mentionList.get(k);
 
                     /* Subset Transitivity */
                     //If there exists an ij subset link, any subset link to/from k
@@ -625,6 +628,22 @@ public class ILPSolverThread extends Thread {
                         _solver.addLessThanConstraint(new int[]{linkIndices[i][j][1],
                                         linkIndices[k][j][y], linkIndices[k][i][y]},
                                 new double[]{1.0, 1.0, -1.0}, 1.0);
+                    }
+
+                    /* Type constraints for subsets */
+                    if(_includeTypeConstraint){
+                        double typeOrPronom_jk = m_j.getPronounType() != Mention.PRONOUN_TYPE.NONE ||
+                                m_k.getPronounType() != Mention.PRONOUN_TYPE.NONE ||
+                                Mention.getLexicalTypeMatch(m_j, m_k) > 0 ? 1.0 : 0.0;
+                        double typeOrPronom_ik = m_i.getPronounType() != Mention.PRONOUN_TYPE.NONE ||
+                                m_k.getPronounType() != Mention.PRONOUN_TYPE.NONE ||
+                                Mention.getLexicalTypeMatch(m_i, m_k) > 0 ? 1.0 : 0.0;
+
+                        _solver.addLessThanConstraint(new int[]{linkIndices[i][j][2], linkIndices[i][k][2]},
+                                new double[]{1.0, 1.0}, 1.0 + typeOrPronom_jk);
+
+                        _solver.addLessThanConstraint(new int[]{linkIndices[j][i][2], linkIndices[j][k][2]},
+                                new double[]{1.0, 1.0}, 1.0 + typeOrPronom_ik);
                     }
                 }
             }

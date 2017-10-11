@@ -139,7 +139,7 @@ public class ScoreDict<K>
         for(int i=0; i<keys.size(); i++)
             if(!ignoredColumnIndices.contains(i))
                 columnHeaders.add(keys.get(i).toString());
-        columnHeaders.add(0, ""); //add an empty cell in the top left
+        columnHeaders.add(0, "p | g->");
         matrix.add(columnHeaders);
 
         //Iterate through the keys in a pred/gold fashion to get each row

@@ -11,7 +11,8 @@ import utilities.*;
 import java.io.File;
 import java.util.*;
 
-import static learn.ILPInference.InferenceType.*;
+import static learn.ILPInference.InferenceType.GROUNDING;
+import static learn.ILPInference.InferenceType.RELATION;
 
 /**The ILPInference class provides static
  * functions for computing and reporting the 
@@ -188,6 +189,21 @@ public class ILPInference
      */
     private void _loadNonvisMentions(String nonvisScoresFile)
     {
+        Logger.log("WARNING: using new nonvis score file formatting (mcc score format)");
+        Map<String, double[]> nonvisScoreDict =
+                ClassifyUtil.readMccScoresFile(nonvisScoresFile);
+        for(Document d : _docDict.values()){
+            for(Mention m : d.getMentionList()){
+                String id = m.getUniqueID();
+                if(nonvisScoreDict.containsKey(id)){
+                    double[] scores = nonvisScoreDict.get(id);
+                    if(scores[1] > scores[0])
+                        _nonvisMentions.add(id);
+                }
+            }
+        }
+
+        /*
         BinaryClassifierScoreDict nonvis_scoreDict =
                 new BinaryClassifierScoreDict(nonvisScoresFile);
         for(Document d : _docDict.values()) {
@@ -197,7 +213,7 @@ public class ILPInference
                     _nonvisMentions.add(m.getUniqueID());
                 }
             }
-        }
+        }*/
     }
 
     /**Loads the previous attempt's solved graphs so we can make
@@ -317,6 +333,10 @@ public class ILPInference
         for(Document d : docScoreDict.keySet()){
             int numEntities = d.getChainSet().size();
             ScoreDict<String> scores = docScoreDict.get(d);
+            if(d.getID().equals("000000048548.jpg")) {
+                System.out.println("---------000000048548--------");
+                scores.printCompleteScores();
+            }
             macroAverage.increment(scores);
             labelSet.addAll(scores.keySet());
 
@@ -464,6 +484,10 @@ public class ILPInference
             ScoreDict<String> scores_intra = new ScoreDict<>(), scores_inter = new ScoreDict<>();
             Set<String> subsetMentions = d.getSubsetMentions();
             List<Mention> mentionList = d.getMentionList();
+
+            if(d.getID().equals("000000048548.jpg")) {
+                System.out.println("---------000000048548--------");
+            }
             for (int i = 0; i < mentionList.size(); i++) {
                 Mention m_i = mentionList.get(i);
                 for (int j = i + 1; j < mentionList.size(); j++) {
@@ -521,6 +545,11 @@ public class ILPInference
                         }
                     }
 
+                    if(d.getID().equals("000000048548.jpg")) {
+                        System.out.println(m_i.getUniqueID() + "|" + m_j.getUniqueID());
+                        System.out.println(m_i.toString() + " -- " + gold + " (g) |" + pred + " (p) --" + m_j);
+                    }
+
                     //Handle subset pairs according to whether the direction
                     //is correct
                     if(gold.startsWith("subset_") && pred.startsWith("subset_")){
@@ -544,13 +573,11 @@ public class ILPInference
                         pred = "subset";
 
                     //Increment the appropriate scores, skipping gold nonvisual pairs
-                    if(!gold.equals("-nonvis-")) {
-                        scores.increment(gold, pred);
-                        if(m_i.getCaptionIdx() == m_j.getCaptionIdx())
-                            scores_intra.increment(gold, pred);
-                        else
-                            scores_inter.increment(gold, pred);
-                    }
+                    scores.increment(gold, pred);
+                    if(m_i.getCaptionIdx() == m_j.getCaptionIdx())
+                        scores_intra.increment(gold, pred);
+                    else
+                        scores_inter.increment(gold, pred);
                 }
             }
             docScoreDict.put(d, scores);
@@ -1105,8 +1132,8 @@ public class ILPInference
     {
         Map<String, Set<Chain[]>> docSubsetChainDict = new HashMap<>();
         for(String docID : _predChains.keySet()){
-            Set<Chain[]> subsetChains = new HashSet<>();
             Document d = _docDict.get(docID);
+            Set<Chain[]> subsetChains = new HashSet<>();
             for(String pairID : _relationGraphs.get(docID).keySet()) {
                 Mention[] pair = d.getMentionPairFromStr(pairID);
 
@@ -1172,6 +1199,8 @@ public class ILPInference
             thread.setRelationScores(_relationScores);
             if(_excludeSubset)
                 thread.excludeSubset();
+            if(_includeTypeConstr)
+                thread.includeTypeConstraint();
         }
         if(_infType == GROUNDING || _infType.toString().contains("JOINT")){
             thread.setAffinityScores(_affinityScores);
@@ -1199,6 +1228,7 @@ public class ILPInference
         Map<String, Set<String>> pronomCoref = new HashMap<>();
         Map<String, Map<String, Integer>> fixedCorefLinks = new HashMap<>();
         if(_infType == InferenceType.RELATION || _infType.toString().contains("JOINT")){
+            /*
             Logger.log("Performing rule-based pronominal coreference");
             for(Document d : _docDict.values()){
                 Set<String> pronomPairs = ClassifyUtil.pronominalCoref(d,
@@ -1228,6 +1258,7 @@ public class ILPInference
             Map<String, Set<Chain>> predChains = _buildChainsFromPredLabels(predLabels_plusPronom);
             for(Document d : _docDict.values())
                 _exportConllFile(d, predChains.get(d.getID()), "plus_pronom");
+            */
         }
 
         /*Perform inference, according to our type*/

@@ -21,31 +21,16 @@ public class Preprocess
 
     /***** Neural Network Preprocessing Functions ****/
 
-    /**Exports four files for use with our neural networks (two for
-     * intra caption and cross caption, respectively). Sentence files
-     * contain captions less punctuation, and are in the format
-     *      [img_id]#[cap_idx]      [cap_less_punc]
-     * Mention index files associate mention pair IDs with the
-     * index of the first word in the sentence(s), the last word
-     * in the sentence(s), and the first and last words of each mention in
-     * the pair. Thus, these are formatted as
-     * Intra-caption
-     *      [pair_id]   0,[cap_end_idx],[m1_start],[m1_end],[m2_start],[m2_end]   [label]
-     # Cross-caption
-     #      [pair_id]   0,[cap_1_end_idx],0,[cap_2_end_idx],[m1_start],[m1_end],[m2_start],[m2_end]   [label]
+    /**Strips punctuation tokens from the captions in the given docSet,
+     * returning a mapping of caption IDs and punctuation-stripped
+     * token lists
      *
-     * @param docSet    Collection of Documents for which files will be
-     *                  generated
-     * @param outroot   Location to which the files should be saved
+     * @param docSet
+     * @return
      */
-    public static void dep_export_neuralRelationFiles(Collection<Document> docSet,
-                                                  String outroot)
+    private static Map<String, List<Token>> stripPunctFromCaptions(Collection<Document> docSet)
     {
-        DoubleDict<Integer> labelDistro = new DoubleDict<>();
-
-        //First, run through the captions, removing punctuation
         Map<String, List<Token>> normCaptions = new HashMap<>();
-        Map<String, List<Mention>> mentionsByCaption = new HashMap<>();
         for(Document d : docSet){
             for(Caption c : d.getCaptionList()){
                 List<Token> tokens = new ArrayList<>();;
@@ -54,193 +39,29 @@ public class Preprocess
                         tokens.add(t);
                 if(!tokens.isEmpty())
                     normCaptions.put(c.getUniqueID(), tokens);
-                mentionsByCaption.put(c.getUniqueID(), c.getMentionList());
             }
         }
-        List<String> ll_normCaptions = new ArrayList<>();
-        normCaptions.forEach((k,v) -> ll_normCaptions.add(k + "\t" + StringUtil.listToString(v, " ")));
-
-        //Now that we have the captions (and associated IDs),
-        //we want to associate each mention with their new bounds
-        Map<String, int[]> mentionIndices = new HashMap<>();
-        for(String capID : normCaptions.keySet()){
-            List<Token> tokens = normCaptions.get(capID);
-            for(int i=0; i<tokens.size(); i++){
-                Token t = tokens.get(i);
-
-                //If this token belongs to a mention, determine
-                //if this is the first or last token in that mention
-                if(t.mentionIdx > -1){
-                    Mention m = mentionsByCaption.get(capID).get(t.mentionIdx);
-                    if(!mentionIndices.containsKey(m.getUniqueID()))
-                        mentionIndices.put(m.getUniqueID(), new int[]{0, tokens.size()-1, -1, -1});
-                    if(i == 0 || tokens.get(i-1).mentionIdx != t.mentionIdx)
-                        mentionIndices.get(m.getUniqueID())[2] = i;
-                    if(i == tokens.size()-1 || tokens.get(i+1).mentionIdx != t.mentionIdx)
-                        mentionIndices.get(m.getUniqueID())[3] = i;
-                }
-            }
-        }
-
-        //For each mention, we now have a mapping of IDs to normalized caption indices;
-        //now we want to pair up these mentions (with intra-caption and cross-caption
-        //mentions being stored separately)
-        List<String> ll_mentionPairIndices_intra = new ArrayList<>();
-        List<String> ll_mentionPairIndices_cross = new ArrayList<>();
-        for(Document d : docSet){
-            List<Mention> mentions = d.getMentionList();
-            Set<String> subsetMentions = d.getSubsetMentions();
-            for(int i=0; i<mentions.size(); i++){
-                Mention m_i = mentions.get(i);
-                int[] indices_i = mentionIndices.get(m_i.getUniqueID());
-
-                //As always, we skip nonvisual mentions
-                if(d.getIsTrain() && m_i.getChainID().equals("0"))
-                    continue;
-
-                //Skip any mentions which -- for some reason -- have
-                //no alphanumeric characters
-                if(indices_i == null)
-                    continue;
-
-                for(int j=i+1; j<mentions.size(); j++){
-                    Mention m_j = mentions.get(j);
-                    int[] indices_j = mentionIndices.get(m_j.getUniqueID());
-
-                    if(d.getIsTrain() && m_j.getChainID().equals("0"))
-                        continue;
-                    if(indices_j == null)
-                        continue;
-
-                    Integer[] indices_ij, indices_ji;
-                    boolean intra = m_i.getCaptionIdx() == m_j.getCaptionIdx();
-                    if(intra){
-                        //In the intra-caption case, each mention can be represented
-                        //by six indices
-                        indices_ij = new Integer[6];
-                        indices_ij[0] = indices_i[0];
-                        indices_ij[1] = indices_i[1];
-                        indices_ij[2] = indices_i[2];
-                        indices_ij[3] = indices_i[3];
-                        indices_ij[4] = indices_j[2];
-                        indices_ij[5] = indices_j[3];
-
-                        //Recall that indices_i[1] == indices_j[1], since
-                        //they originate from the same caption
-                        indices_ji = new Integer[6];
-                        indices_ji[0] = indices_j[0];
-                        indices_ji[1] = indices_j[1];
-                        indices_ji[2] = indices_j[2];
-                        indices_ji[3] = indices_j[3];
-                        indices_ji[4] = indices_i[2];
-                        indices_ji[5] = indices_i[3];
-                    } else {
-                        //In the cross-caption case, each mention can be represented
-                        //by eight indices
-                        indices_ij = new Integer[8];
-                        indices_ij[0] = indices_i[0];
-                        indices_ij[1] = indices_i[1];
-                        indices_ij[2] = indices_j[0];
-                        indices_ij[3] = indices_j[1];
-                        indices_ij[4] = indices_i[2];
-                        indices_ij[5] = indices_i[3];
-                        indices_ij[6] = indices_j[2];
-                        indices_ij[7] = indices_j[3];
-
-                        indices_ji = new Integer[8];
-                        indices_ji[0] = indices_j[0];
-                        indices_ji[1] = indices_j[1];
-                        indices_ji[2] = indices_i[0];
-                        indices_ji[3] = indices_i[1];
-                        indices_ji[4] = indices_j[2];
-                        indices_ji[5] = indices_j[3];
-                        indices_ji[6] = indices_i[2];
-                        indices_ji[7] = indices_i[3];
-                    }
-
-                    //Find the label for this pair
-                    int label_ij = 0, label_ji = 0;
-                    String id_ij = Document.getMentionPairStr(m_i, m_j);
-                    String id_ji = Document.getMentionPairStr(m_j, m_i);
-                    if(!m_i.getChainID().equals("0") && !m_j.getChainID().equals("0")){
-                        if(m_i.getChainID().equals(m_j.getChainID())){
-                            label_ij = 1;
-                            label_ji = 1;
-                        } else if(subsetMentions.contains(id_ij)){
-                            label_ij = 2;
-                            label_ji = 3;
-                        } else if(subsetMentions.contains(id_ji)){
-                            label_ji = 2;
-                            label_ij = 3;
-                        }
-                    }
-                    labelDistro.increment(label_ij);
-                    labelDistro.increment(label_ji);
-
-                    //Finally, add the lines to the appropriate line list
-                    String line_ij = id_ij + "\t" + StringUtil.listToString(indices_ij, ",") +
-                                     "\t" + label_ij;
-                    String line_ji = id_ji + "\t" + StringUtil.listToString(indices_ji, ",") +
-                                     "\t" + label_ji;
-                    if(intra){
-                        ll_mentionPairIndices_intra.add(line_ij);
-                        ll_mentionPairIndices_intra.add(line_ji);
-                    } else {
-                        ll_mentionPairIndices_cross.add(line_ij);
-                        ll_mentionPairIndices_cross.add(line_ji);
-                    }
-                }
-            }
-        }
-
-        //Write all of the files
-        FileIO.writeFile(ll_normCaptions, outroot + "_captions", "txt", false);
-        FileIO.writeFile(ll_mentionPairIndices_intra, outroot + "_mentionPairs_intra", "txt", false);
-        FileIO.writeFile(ll_mentionPairIndices_cross, outroot + "_mentionPairs_cross", "txt", false);
-
-        Logger.log("Label Distribution");
-        for(int i=0; i<4; i++)
-            System.out.printf("%d: %.2f%%\n",
-                    i, 100.0 * labelDistro.get(i) / labelDistro.getSum());
+        return normCaptions;
     }
 
-    /**Exports four files for use with our neural networks (two for
-     * intra caption and cross caption, respectively). Sentence files
-     * contain captions less punctuation, and are in the format
-     *      [img_id]#[cap_idx]      [cap_less_punc]
-     * Mention index files associate mention pair IDs with the
-     * index of the first and last words of each mention in the pair,
-     * formatted as
-     *      [pair_id]   [m1_start],[m1_end],[m2_start],[m2_end]   [label]
+
+    /**Re-maps mention boundaries to their position in the normalized (that is,
+     * punctuation-less) captions
      *
-     * @param docSet    Collection of Documents for which files will be
-     *                  generated
-     * @param outroot   Location to which the files should be saved
+     * @param docSet
+     * @param normCaptions
+     * @return
      */
-    public static void export_neuralRelationFiles(Collection<Document> docSet,
-                                                  String outroot)
+    private static Map<String, int[]> remapMentionBounds(Collection<Document> docSet,
+                                                         Map<String, List<Token>> normCaptions)
     {
-        DoubleDict<Integer> labelDistro = new DoubleDict<>();
-
-        //First, run through the captions, removing punctuation
-        Map<String, List<Token>> normCaptions = new HashMap<>();
+        //Get a mapping from caption IDs to a list of mentions
         Map<String, List<Mention>> mentionsByCaption = new HashMap<>();
-        for(Document d : docSet){
-            for(Caption c : d.getCaptionList()){
-                List<Token> tokens = new ArrayList<>();;
-                for(Token t : c.getTokenList())
-                    if(StringUtil.hasAlphaNum(t.toString()))
-                        tokens.add(t);
-                if(!tokens.isEmpty())
-                    normCaptions.put(c.getUniqueID(), tokens);
+        for(Document d : docSet)
+            for(Caption c : d.getCaptionList())
                 mentionsByCaption.put(c.getUniqueID(), c.getMentionList());
-            }
-        }
-        List<String> ll_normCaptions = new ArrayList<>();
-        normCaptions.forEach((k,v) -> ll_normCaptions.add(k + "\t" + StringUtil.listToString(v, " ")));
 
-        //Now that we have the captions (and associated IDs),
-        //we want to associate each mention with their new bounds
+        //Remap the mentions to their new bounds in the punctuation-less captions
         Map<String, int[]> mentionIndices = new HashMap<>();
         for(String capID : normCaptions.keySet()){
             List<Token> tokens = normCaptions.get(capID);
@@ -260,6 +81,47 @@ public class Preprocess
                 }
             }
         }
+        return mentionIndices;
+    }
+
+    /**Exports a caption file for use with our neural networks, where
+     * each caption has all punctuation tokens removed in the fomrat
+     *      [img_id]#[cap_idx]      [cap_less_punc]
+     *
+     * @param docSet    Collection of Documents for which files will be
+     *                  generated
+     * @param outroot   Location to which the files should be saved
+     */
+    public static void export_neuralCaptionFile(Collection<Document> docSet, String outroot)
+    {
+        Map<String, List<Token>> normCaptions = stripPunctFromCaptions(docSet);
+        List<String> ll_normCaptions = new ArrayList<>();
+        normCaptions.forEach((k,v) -> ll_normCaptions.add(k + "\t" + StringUtil.listToString(v, " ")));
+        FileIO.writeFile(ll_normCaptions, outroot + "_captions", "txt", false);
+    }
+
+    /**Exports three files for use with relation prediction via our neural networks:
+     * mention index files for intra/cross captions respectively, and a mention pair
+     * label file for our pairwise labeling, formatted as
+     *      [pair_id]   [m1_start],[m1_end],[m2_start],[m2_end]   [label]
+     * and
+     *      [m_i_id] [m_j_id] [pairwise_label[
+     * respectively
+     *
+     * @param docSet    Collection of Documents for which files will be
+     *                  generated
+     * @param outroot   Location to which the files should be saved
+     */
+    public static void export_neuralRelationFiles(Collection<Document> docSet,
+                                                  String outroot)
+    {
+        DoubleDict<Integer> labelDistro = new DoubleDict<>();
+
+        //Strip punctuation tokens from our captions
+        Map<String, List<Token>> normCaptions = stripPunctFromCaptions(docSet);
+
+        //Remap mention boundaries in these new normalized captions
+        Map<String, int[]> mentionIndices = remapMentionBounds(docSet, normCaptions);
 
         //Get the predicted pronominal chains / mentions for unreviewed training
         //documents
@@ -273,6 +135,7 @@ public class Preprocess
         //mentions being stored separately)
         List<String> ll_mentionPairIndices_intra = new ArrayList<>();
         List<String> ll_mentionPairIndices_cross = new ArrayList<>();
+        List<String> ll_mentionPairLabels = new ArrayList<>();
         for(Document d : docSet){
             List<Mention> mentions = d.getMentionList();
             Set<String> subsetMentions = d.getSubsetMentions();
@@ -285,6 +148,22 @@ public class Preprocess
                         if(m.getPronounType() != Mention.PRONOUN_TYPE.NONE &&
                            m.getPronounType() != Mention.PRONOUN_TYPE.SEMI)
                             predictedPronomMentions.put(m, c.getID());
+
+            Map<String, Set<Integer>> chainBoxDict = new HashMap<>();
+            for(Chain c : d.getChainSet()){
+                chainBoxDict.put(c.getID(), new HashSet<>());
+                for(BoundingBox b : c.getBoundingBoxSet())
+                    chainBoxDict.get(c.getID()).add(b.getIdx());
+            }
+            Set<Chain[]> subsetChainPairs = d.getSubsetChains();
+            Map<String, Set<String>> subsetChainDict = new HashMap<>();
+            for(Chain[] subsetPair : subsetChainPairs){
+                String subID = subsetPair[0].getID();
+                String supID = subsetPair[1].getID();
+                if(!subsetChainDict.containsKey(subID))
+                    subsetChainDict.put(subID, new HashSet<>());
+                subsetChainDict.get(subID).add(supID);
+            }
 
             for(int i=0; i<mentions.size(); i++){
                 Mention m_i = mentions.get(i);
@@ -312,6 +191,9 @@ public class Preprocess
                     if(indices_j == null)
                         continue;
 
+
+
+
                     //Simply store the first and last indices of ij and ji
                     Integer[] indices_ij = {indices_i[0], indices_i[1],
                                             indices_j[0], indices_j[1]};
@@ -322,7 +204,48 @@ public class Preprocess
                     int label_ij = 0, label_ji = 0;
                     String id_ij = Document.getMentionPairStr(m_i, m_j);
                     String id_ji = Document.getMentionPairStr(m_j, m_i);
-                    if(!m_i.getChainID().equals("0") && !m_j.getChainID().equals("0")){
+                    String chainID_i = m_i.getChainID();
+                    String chainID_j = m_j.getChainID();
+                    Set<String> supChains_i = subsetChainDict.get(chainID_i);
+                    Set<String> supChains_j = subsetChainDict.get(chainID_j);
+                    if(!chainID_i.equals("0") && !chainID_j.equals("0")){
+
+                        if(chainID_i.equals(chainID_j)){
+                            label_ij = 1;
+                            label_ji = 1;
+                        } else if(supChains_i != null && supChains_i.contains(chainID_j)){
+                            label_ij = 2;
+                            label_ji = 3;
+                        } else if(supChains_j != null && supChains_j.contains(chainID_i)){
+                            label_ji = 2;
+                            label_ij = 3;
+                        }
+
+                        /*else if(supChains_i != null && supChains_j != null){
+                            Set<String> supIntersect = new HashSet<>(supChains_i);
+                            supIntersect.retainAll(supChains_j);
+                            if(!supIntersect.isEmpty()){
+                                label_ij = 4;
+                                label_ji = 4;
+                            }
+                        }
+                        if(label_ij == 0){
+                            Set<Integer> boxes_i = chainBoxDict.get(chainID_i);
+                            Set<Integer> boxes_j = chainBoxDict.get(chainID_j);
+                            Set<Integer> boxIntersect = new HashSet<>(boxes_i);
+                            boxIntersect.retainAll(boxes_j);
+                            if(!boxes_i.isEmpty() && !boxes_j.isEmpty() && !boxIntersect.isEmpty() &&
+                                boxes_i.size() != boxIntersect.size() && boxes_j.size() != boxIntersect.size()){
+                                if(m_i.getPronounType() != Mention.PRONOUN_TYPE.NONE ||
+                                   m_j.getPronounType() != Mention.PRONOUN_TYPE.NONE ||
+                                   Mention.getLexicalTypeMatch(m_i, m_j) > 0){
+                                    label_ij = 5;
+                                    label_ji = 5;
+                                }
+                            }
+                        }*/
+
+                        /*
                         if(m_i.getChainID().equals(m_j.getChainID())){
                             label_ij = 1;
                             label_ji = 1;
@@ -332,8 +255,10 @@ public class Preprocess
                         } else if(subsetMentions.contains(id_ji)){
                             label_ji = 2;
                             label_ij = 3;
-                        }
+                        }*/
                     }
+
+
                     //If this is one of the pronouns that we have a prediction for, this is
                     //a coref case
                     if(predictedPronomMentions.containsKey(m_i) &&
@@ -346,6 +271,36 @@ public class Preprocess
 
                     labelDistro.increment(label_ij);
                     labelDistro.increment(label_ji);
+
+                    //Get the pairwise label, for the label file
+                    boolean nonvisMention = m_i.getChainID().equals("0") || m_j.getChainID().equals("0");
+                    String gold = "disjoint";
+                    if(nonvisMention){
+                        gold = "nonvis";
+                    } else {
+                        if(label_ij == 1)
+                            gold = "coref";
+                        else if(label_ij == 2)
+                            gold = "subsect_ij";
+                        else if(label_ij == 3)
+                            gold = "subset_ji";
+                        /*
+                        else if(label_ij == 4)
+                            gold = "complement";
+                        else if(label_ij == 5)
+                            gold = "intersect";
+                        */
+
+                        /*
+                        if(m_i.getChainID().equals(m_j.getChainID())){
+                            gold = "coref";
+                        } else if(subsetMentions.contains(id_ij)) {
+                            gold = "subset_ij";
+                        } else if(subsetMentions.contains(id_ji)){
+                            gold = "subset_ji";
+                        }*/
+                    }
+                    ll_mentionPairLabels.add(String.format("%s %s %s", id_ij, id_ji, gold));
 
                     //Finally, add the lines to the appropriate line list
                     String line_ij = id_ij + "\t" + StringUtil.listToString(indices_ij, ",") +
@@ -364,57 +319,77 @@ public class Preprocess
         }
 
         //Write all of the files
-        FileIO.writeFile(ll_normCaptions, outroot + "_captions", "txt", false);
+        FileIO.writeFile(ll_mentionPairLabels, outroot + "_mentionPair_labels", "txt", false);
         FileIO.writeFile(ll_mentionPairIndices_intra, outroot + "_mentionPairs_intra", "txt", false);
         FileIO.writeFile(ll_mentionPairIndices_cross, outroot + "_mentionPairs_cross", "txt", false);
 
         Logger.log("Label Distribution");
-        for(int i=0; i<4; i++)
+        for(int i=0; i<labelDistro.keySet().size(); i++)
             System.out.printf("%d: %.2f%%\n",
                     i, 100.0 * labelDistro.get(i) / labelDistro.getSum());
     }
 
-    /**Exports a file to outroot that contains mention pair relation labels,
-     * where each line is formatted as
-     *      m_i_id m_j_id label
-     * Intended for use with ImageCaptionLearn_py during evaluation
+    /**Exports a mention file mapping the mention's ID to the normalized
+     * caption bounds with nonvisual labeling; note also that predicted
+     * coreferent pronouns are marked as nonvisual in the unreviewed
+     * flickr training data; each line is formatted as
+     *      [m_id]   [m_start],[m_end]   [label]
      *
-     * @param docSet
-     * @param outroot
+     * @param docSet    Collection of Documents for which files will be
+     *                  generated
+     * @param outroot   Location to which the files should be saved
      */
-    public static void export_relationLabelFile(Collection<Document> docSet, String outroot)
+    public static void export_neuralNonvisFile(Collection<Document> docSet, String outroot)
     {
-        List<String> ll_relationLabels = new ArrayList<>();
-        for(Document d : docSet) {
-            Set<String> subsetMentions = d.getSubsetMentions();
-            List<Mention> mentionList = d.getMentionList();
-            for (int i = 0; i < mentionList.size(); i++) {
-                Mention m_i = mentionList.get(i);
-                for (int j = i + 1; j < mentionList.size(); j++) {
-                    Mention m_j = mentionList.get(j);
+        DoubleDict<Integer> labelDistro = new DoubleDict<>();
 
-                    String id_ij = Document.getMentionPairStr(m_i, m_j);
-                    String id_ji = Document.getMentionPairStr(m_j, m_i);
-                    boolean nonvisMention = m_i.getChainID().equals("0") || m_j.getChainID().equals("0");
+        //Strip punctuation tokens from our captions
+        Map<String, List<Token>> normCaptions = stripPunctFromCaptions(docSet);
 
-                    String gold = "null";
-                    if(nonvisMention){
-                        gold = "nonvis";
-                    } else {
-                        if(m_i.getChainID().equals(m_j.getChainID())){
-                            gold = "coref";
-                        } else if(subsetMentions.contains(id_ij)) {
-                            gold = "subset_ij";
-                        } else if(subsetMentions.contains(id_ji)){
-                            gold = "subset_ji";
-                        }
-                    }
+        //Remap mention boundaries in these new normalized captions
+        Map<String, int[]> mentionIndices = remapMentionBounds(docSet, normCaptions);
 
-                    ll_relationLabels.add(String.format("%s %s %s", id_ij, id_ji, gold));
+        //Get the predicted pronominal chains / mentions for unreviewed training
+        //documents
+        Set<Mention> attachedPronouns = new HashSet<>();
+        for(Document d : docSet){
+            if(!d.reviewed){
+                Set<Chain> pronomChains = ClassifyUtil.pronominalCorefChains(d, true);
+                for(Chain c : pronomChains)
+                    for(Mention m : c.getMentionSet())
+                        if(m.getPronounType() != Mention.PRONOUN_TYPE.NONE &&
+                           m.getPronounType() != Mention.PRONOUN_TYPE.SEMI)
+                            attachedPronouns.add(m);
+            }
+        }
+
+        //For each mention, we now have a mapping of IDs to normalized caption indices;
+        //now we want to pair up these mentions
+        List<String> ll_mentionIndices = new ArrayList<>();
+        for(Document d : docSet){
+            for(Mention m : d.getMentionList()){
+                int nonvis = 0;
+                if(m.getChainID().equals("0"))
+                    if(attachedPronouns.isEmpty() || !attachedPronouns.contains(m))
+                        nonvis = 1;
+                labelDistro.increment(nonvis);
+
+                //We simply ignore those mentions that don't contain non-punct tokens
+                if(mentionIndices.containsKey(m.getUniqueID())){
+                    int[] indices = mentionIndices.get(m.getUniqueID());
+                    ll_mentionIndices.add(String.format("%s\t%d,%d\t%s",
+                            m.getUniqueID(), indices[0], indices[1], nonvis));
                 }
             }
         }
-        FileIO.writeFile(ll_relationLabels, outroot, "txt", false);
+
+        //Write all of the files
+        FileIO.writeFile(ll_mentionIndices, outroot + "_mentions_nonvis", "txt", false);
+
+        Logger.log("Label Distribution");
+        for(int i=0; i<2; i++)
+            System.out.printf("%d: %.2f%%\n",
+                    i, 100.0 * labelDistro.get(i) / labelDistro.getSum());
     }
 
     /***** Phrase Localization Functions ****/

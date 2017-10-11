@@ -500,9 +500,11 @@ public abstract class ClassifyUtil {
      * @param outroot
      */
     public static void exportFeatures_nonvis(Collection<Document> docSet, String outroot,
-                                             boolean includeCard, String cardFile)
+                                             boolean forNeural, boolean includeCard,
+                                             String cardFile)
     {
-        _exportFeatures_singleMention(docSet, outroot, "nonvis", includeCard, cardFile);
+        _exportFeatures_singleMention(docSet, outroot, "nonvis", forNeural,
+                                      includeCard, cardFile);
     }
 
     /**Exports box cardinality features to [outroot].feats, using the given docSet
@@ -510,19 +512,21 @@ public abstract class ClassifyUtil {
      * @param docSet
      * @param outroot
      */
-    public static void exportFeatures_cardinality(Collection<Document> docSet, String outroot)
+    public static void exportFeatures_cardinality(Collection<Document> docSet,
+                                                  String outroot, boolean forNeural)
     {
-        _exportFeatures_singleMention(docSet, outroot, "cardinality", false, null);
+        _exportFeatures_singleMention(docSet, outroot, "cardinality",
+                                      forNeural, false, null);
     }
 
     public static void exportFeatures_combined(Collection<Document> docSet, String outRoot)
     {
-        _exportFeatures_singleMention(docSet, outRoot, "combined", false, null);
+        _exportFeatures_singleMention(docSet, outRoot, "combined", false, false, null);
     }
 
     public static void exportFeatures_phase1(Collection<Document> docSet, String outRoot)
     {
-        _exportFeatures_singleMention(docSet, outRoot, "phase_1", false, null);
+        _exportFeatures_singleMention(docSet, outRoot, "phase_1", false, false, null);
     }
 
 
@@ -535,7 +539,8 @@ public abstract class ClassifyUtil {
      */
     private static void _exportFeatures_singleMention(Collection<Document> docSet,
                                                       String outroot, String labelType,
-                                                      boolean includeCard, String cardFile)
+                                                      boolean forNeural, boolean includeCard,
+                                                      String cardFile)
     {
         //Feature preprocessing
         _featurePreprocessing(docSet);
@@ -590,26 +595,30 @@ public abstract class ClassifyUtil {
 
                 //head word / modifiers / lexical type
                 String head = m.getHead().toString().toLowerCase();
-                currentIdx = _addOneHotVector(head, fv, currentIdx, _heads, "head_onehot", metaDict);
                 String[] mods = m.getModifiers();
-                currentIdx = _addOneHotVector(mods[0], fv, currentIdx, _numerics, "numeric_onehot", metaDict);
-                currentIdx = _addOneHotVector(mods[1], fv, currentIdx, _modifiers, "modifier_onehot", metaDict);
                 String lexType = m.getLexicalType().toLowerCase();
-                currentIdx = _addOneHotVector(lexType, fv, currentIdx, _types, "lexical_type_onehot", metaDict);
                 String cocoCat = Mention.getLexicalEntry_cocoCategory(m, true);
-                currentIdx = _addOneHotVector(cocoCat, fv, currentIdx, _categories, "coco_category_onehot", metaDict);
                 String lemma = m.getHead().getLemma().toLowerCase();
-                currentIdx = _addOneHotVector(lemma, fv, currentIdx, _nonvisuals, "nonvisual_lemma_onehot", metaDict);
+                if(!forNeural){
+                    currentIdx = _addOneHotVector(head, fv, currentIdx, _heads, "head_onehot", metaDict);
+                    currentIdx = _addOneHotVector(mods[0], fv, currentIdx, _numerics, "numeric_onehot", metaDict);
+                    currentIdx = _addOneHotVector(mods[1], fv, currentIdx, _modifiers, "modifier_onehot", metaDict);
+                    currentIdx = _addOneHotVector(lemma, fv, currentIdx, _nonvisuals, "nonvisual_lemma_onehot", metaDict);
+                }
+                currentIdx = _addOneHotVector(lexType, fv, currentIdx, _types, "lexical_type_onehot", metaDict);
+                currentIdx = _addOneHotVector(cocoCat, fv, currentIdx, _categories, "coco_category_onehot", metaDict);
 
                 //governing verbs
                 Chunk subjOf = _subjOfDict.get(m); String subjOfStr = "";
                 if(subjOf != null)
                     subjOfStr = subjOf.getTokenList().get(subjOf.getTokenList().size()-1).toString().toLowerCase();
-                currentIdx = _addOneHotVector(subjOfStr, fv, currentIdx, _subjOfs, "subj_of_onehot", metaDict);
                 Chunk objOf = _objOfDict.get(m); String objOfStr = "";
                 if(objOf != null)
                     objOfStr = objOf.getTokenList().get(objOf.getTokenList().size()-1).toString().toLowerCase();
-                currentIdx = _addOneHotVector(objOfStr, fv, currentIdx, _objOfs, "obj_of_onehot", metaDict);
+                if(!forNeural){
+                    currentIdx = _addOneHotVector(subjOfStr, fv, currentIdx, _subjOfs, "subj_of_onehot", metaDict);
+                    currentIdx = _addOneHotVector(objOfStr, fv, currentIdx, _objOfs, "obj_of_onehot", metaDict);
+                }
 
                 //right and left chunk types
                 Chunk[] chunkNeighbors = _mentionChunkNeighborDict.get(m);
@@ -638,14 +647,16 @@ public abstract class ClassifyUtil {
                         _prepositions, "right_preposition_onehot", metaDict);
 
                 //hypernyms
-                Set<String> hypSet = _hypDict.get(m.getHead().getLemma().toLowerCase());
-                int start = currentIdx;
-                for(String hyp : _hypernyms){
-                    if(hypSet != null && hypSet.contains(hyp))
-                        fv.addFeature(currentIdx, 1.0);
-                    currentIdx++;
+                if(!forNeural){
+                    Set<String> hypSet = _hypDict.get(m.getHead().getLemma().toLowerCase());
+                    int start = currentIdx;
+                    for(String hyp : _hypernyms){
+                        if(hypSet != null && hypSet.contains(hyp))
+                            fv.addFeature(currentIdx, 1.0);
+                        currentIdx++;
+                    }
+                    _addMetaEntry("hypernym_bow", start, currentIdx, metaDict);
                 }
-                _addMetaEntry("hypernym_bow", start, currentIdx, metaDict);
 
                 //new subset features
                 int f_hasArticle = _articles.contains(m.getTokenList().get(0).toString().toLowerCase()) ? TRUE : FALSE;
@@ -761,8 +772,12 @@ public abstract class ClassifyUtil {
         Set<String> freqNonvisHeads = _loadOnehotDict(nonvisHistFile, 10).keySet();
 
         Logger.log("Loading predicted nonvisual score dict from " + nonvisScoresFile);
+        Logger.log("WARNING: using new nonvis score file formatting (mcc score format)");
+        Map<String, double[]> nonvisScoreDict = ClassifyUtil.readMccScoresFile(nonvisScoresFile);
+
+        /*
         BinaryClassifierScoreDict nonvis_scoreDict =
-                new BinaryClassifierScoreDict(nonvisScoresFile);
+                new BinaryClassifierScoreDict(nonvisScoresFile);*/
 
         Logger.log("Evaluating visual mention detection");
         ScoreDict<Integer> scoreDict_heur = new ScoreDict<>();
@@ -770,8 +785,14 @@ public abstract class ClassifyUtil {
         for(Document d : docSet){
             for(Mention m : d.getMentionList()){
                 int gold = m.getChainID().equals("0") ? 0 : 1;
+                int pred_model = 0;
+                if(nonvisScoreDict.containsKey(m.getUniqueID())){
+                    double[] scores = nonvisScoreDict.get(m.getUniqueID());
+                    pred_model = scores[0] > scores[1] ? 1 : 0;
+                }
+                /*
                 int pred_model = nonvis_scoreDict.get(m) != null &&
-                        nonvis_scoreDict.get(m) < 0 ? 1 : 0;
+                        nonvis_scoreDict.get(m) < 0 ? 1 : 0;*/
                 int pred_heur = 1;
                 if(freqNonvisHeads.contains(m.getHead().toString().toLowerCase()))
                     pred_heur = 0;
@@ -1888,6 +1909,8 @@ public abstract class ClassifyUtil {
         private Map<String, double[]> _cardScores;
         private boolean _includeCard;
         private boolean _forNeural;
+        private Map<String, Set<Integer>> _chainBoxDict;
+        private Map<String, Set<String>> _subsetChainDict;
         Collection<FeatureVector> fvSet;
 
 
@@ -1944,6 +1967,24 @@ public abstract class ClassifyUtil {
                     _cardScores = cardScores;
                 }
             }
+
+            //Associate all chains with their boxes
+            _chainBoxDict = new HashMap<>();
+            for(Chain c : _doc.getChainSet()){
+                _chainBoxDict.put(c.getID(), new HashSet<>());
+                for(BoundingBox b : c.getBoundingBoxSet())
+                    _chainBoxDict.get(c.getID()).add(b.getIdx());
+            }
+
+            //Associate chains with all of their supersets
+            _subsetChainDict = new HashMap<>();
+            for(Chain[] subsetPair : _doc.getSubsetChains()){
+                String subID = subsetPair[0].getID();
+                String supID = subsetPair[1].getID();
+                if(!_subsetChainDict.containsKey(subID))
+                    _subsetChainDict.put(subID, new HashSet<>());
+                _subsetChainDict.get(subID).add(supID);
+            }
         }
 
         /**Returns the meta-dict for these relation features
@@ -1986,6 +2027,64 @@ public abstract class ClassifyUtil {
                 }
             }
         }
+
+
+        private int _getLabel(Mention m_i, Mention m_j)
+        {
+            String chainID_i = m_i.getChainID();
+            String chainID_j = m_j.getChainID();
+
+            //Nonvisual mentions have disjoint links
+            if(chainID_i.equals("0") || chainID_j.equals("0"))
+                return 0;
+
+            //Coreferent mentions are label 1
+            if(chainID_i.equals(chainID_j))
+                return 1;
+
+            //Subset mentions are 2 and 3, respectively
+            Set<String> supChains_i = _subsetChainDict.get(chainID_i);
+            Set<String> supChains_j = _subsetChainDict.get(chainID_j);
+            if(supChains_i != null && supChains_i.contains(chainID_j))
+                return 2;
+            if(supChains_j != null && supChains_j.contains(chainID_i))
+                return 3;
+
+            /*
+            //Complement is a symmetric link between entities that
+            //belong to the same superset but are not otherwise
+            //related
+            if(supChains_i != null && supChains_j != null){
+                Set<String> supIntersect = new HashSet<>(supChains_i);
+                supIntersect.retainAll(supChains_j);
+                if(!supIntersect.isEmpty())
+                    return 4;
+            }
+
+            //Intersecting links occur when two entities share some boxes and
+            //the same lexical type (non pronominal mentions only) but do not
+            //share all their boxes
+            Set<Integer> boxes_i = _chainBoxDict.get(chainID_i);
+            Set<Integer> boxes_j = _chainBoxDict.get(chainID_j);
+            //If both these mentions have boxes...
+            if(!boxes_i.isEmpty() && !boxes_j.isEmpty()){
+                Set<Integer> boxIntersect = new HashSet<>(boxes_i);
+                boxIntersect.retainAll(boxes_j);
+                //...and their box sets intersect but do not subsume one another...
+                if(!boxIntersect.isEmpty() && boxes_i.size() > boxIntersect.size() &&
+                   boxes_j.size() > boxIntersect.size()){
+                    if(m_i.getPronounType() != Mention.PRONOUN_TYPE.NONE ||
+                       m_j.getPronounType() != Mention.PRONOUN_TYPE.NONE ||
+                       Mention.getLexicalTypeMatch(m_i, m_j) > 0){
+                        return 5;
+                    }
+                }
+            }*/
+
+            //All other cases are disjoint, or 0
+            return 0;
+        }
+
 
         /**Return a complete pairwise feature vector, given the
          * ordered pair of mentions
@@ -2582,6 +2681,8 @@ public abstract class ClassifyUtil {
 
             //Finally, add a four-way label indicating if these mentions are
             //coreferent, subset, or null\
+
+            /*
             Integer label = 0;
             if(!m1.getChainID().equals("0") && !m2.getChainID().equals("0")){
                String id_ij = Document.getMentionPairStr(m1, m2);
@@ -2596,10 +2697,10 @@ public abstract class ClassifyUtil {
                                //vector from this pair will be 2
                 else if(_partOfMentions.contains(id_ij))
                     label = 4; //Part of relations are asymmetrical
-            }
+            }*/
 
             _addMetaEntry("max_idx", currentIdx+1, _metaDict);
-            fv.label = label;
+            fv.label = _getLabel(m1, m2);
             fv.comments = Document.getMentionPairStr(m1, m2);
             return fv;
         }

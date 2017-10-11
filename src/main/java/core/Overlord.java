@@ -239,9 +239,184 @@ public class Overlord
             } else {
 
 
-                Preprocess.export_phraseLocalization_affinityLists(docSet, "trainAsDev", Overlord.dataPath +
-                        "tacl201708/nn/bryan_affinity/" + dataset + "_trainAsDev");
+                String raw_root = Overlord.dataPath + "tacl201711/raw/" +
+                        dataset + "_" + split;
 
+                List<Document> docList = new ArrayList<>(docSet);
+                Collections.shuffle(docList);
+                docList = docList.subList(0, (int)(0.2*docSet.size()));
+                raw_root += "_tune";
+
+                //Preprocess.export_neuralCaptionFile(docList, raw_root);
+                Preprocess.export_neuralRelationFiles(docList, raw_root);
+                //Preprocess.export_neuralNonvisFile(docList, raw_root);
+                System.exit(0);
+
+
+                /**Consider our label distribution when we have
+                 * coref (symmetric)
+                 * subset (directed; consistent)
+                 * superset (directed; consistent)
+                 * complement (symmetric; sets that belong to the same
+                 *            hierarchy but are not otherwise directly related)
+                 * intersect (symmetric)
+                 * disjoint
+                 */
+                DoubleDict<String> newLabelDistro = new DoubleDict<>();
+                for(Document d : docSet){
+                    Map<String, Set<Integer>> chainBoxDict = new HashMap<>();
+                    for(Chain c : d.getChainSet()){
+                        chainBoxDict.put(c.getID(), new HashSet<>());
+                        for(BoundingBox b : c.getBoundingBoxSet())
+                            chainBoxDict.get(c.getID()).add(b.getIdx());
+                    }
+                    Set<Chain[]> subsetChainPairs = d.getSubsetChains();
+                    Map<String, Set<String>> subsetDict = new HashMap<>();
+                    for(Chain[] subsetPair : subsetChainPairs){
+                        String subID = subsetPair[0].getID();
+                        String supID = subsetPair[1].getID();
+                        if(!subsetDict.containsKey(subID))
+                            subsetDict.put(subID, new HashSet<>());
+                        subsetDict.get(subID).add(supID);
+                    }
+
+                    List<Mention> mentions = d.getMentionList();
+                    for(int i=0; i<mentions.size(); i++){
+                        Mention m_i = mentions.get(i);
+                        if(m_i.getChainID().equals("0"))
+                            continue;
+
+                        for(int j=i+1; j<mentions.size(); j++){
+                            Mention m_j = mentions.get(j);
+                            if(m_j.getChainID().equals("0"))
+                                continue;
+
+                            String chainID_i = m_i.getChainID();
+                            String chainID_j = m_j.getChainID();
+                            Set<String> supChains_i = subsetDict.get(chainID_i);
+                            Set<String> supChains_j = subsetDict.get(chainID_j);
+                            String label_ij = "disjoint", label_ji="disjoint";
+                            if(chainID_i.equals(chainID_j)){
+                                label_ij = "coref";
+                                label_ji = "coref";
+                            } else if(supChains_i != null && supChains_i.contains(chainID_j)){
+                                label_ij = "subset";
+                                label_ji = "supset";
+                            } else if(supChains_j != null && supChains_j.contains(chainID_i)){
+                                label_ji = "subset";
+                                label_ij = "supset";
+                            } else if(supChains_i != null && supChains_j != null){
+                                Set<String> supIntersect = new HashSet<>(supChains_i);
+                                supIntersect.retainAll(supChains_j);
+                                if(!supIntersect.isEmpty()){
+                                    label_ij = "complement";
+                                    label_ji = "complement";
+                                }
+                            }
+                            if(label_ij.equals( "disjoint")) {
+                                Set<Integer> boxes_i = chainBoxDict.get(chainID_i);
+                                Set<Integer> boxes_j = chainBoxDict.get(chainID_j);
+                                Set<Integer> boxIntersect = new HashSet<>(boxes_i);
+                                boxIntersect.retainAll(boxes_j);
+                                if(!boxes_i.isEmpty() && !boxes_j.isEmpty() && !boxIntersect.isEmpty() &&
+                                        boxes_i.size() != boxIntersect.size() && boxes_j.size() != boxIntersect.size()){
+                                    if(m_i.getPronounType() == Mention.PRONOUN_TYPE.NONE &&
+                                            m_j.getPronounType() == Mention.PRONOUN_TYPE.NONE){
+                                        if(Mention.getLexicalTypeMatch(m_i, m_j) > 0){
+                                            label_ij = "intersect";
+                                            label_ji = "intersect";
+                                        }
+                                    } else {
+                                        label_ij = "intersect";
+                                        label_ji = "intersect";
+                                    }
+                                }
+                            }
+                            newLabelDistro.increment(label_ij);
+                            newLabelDistro.increment(label_ji);
+                        }
+                    }
+                }
+
+                double ttl = newLabelDistro.getSum();
+                for(String label : newLabelDistro.getSortedByValKeys(true)){
+                    System.out.printf("%-10s: %d (%.2f%%)\n",
+                                      label, (int)newLabelDistro.get(label),
+                                      100.0 * newLabelDistro.get(label) / ttl);
+                }
+
+
+
+
+                /** How often is it the case that a chain has
+                 *  more than one superset (excluding transitive
+                 *  closure cases*/
+                DoubleDict<Integer> subsetHist = new DoubleDict<>();
+                for(Document d : docSet){
+                    List<Chain[]> subsetChains =
+                            new ArrayList<>(d.getSubsetChains());
+                    int n_chains = -1;
+                    Set<Integer> indicesToRemove = new HashSet<>();
+                    while(n_chains != subsetChains.size()){
+                        n_chains = subsetChains.size();
+                        for(int i=0; i<n_chains; i++){
+                            if(indicesToRemove.contains(i))
+                                continue;
+                            Chain[] pair_i = subsetChains.get(i);
+
+                            for(int j=i+1; j<n_chains; j++){
+                                if(indicesToRemove.contains(j))
+                                    continue;
+                                Chain[] pair_j = subsetChains.get(j);
+
+                                for(int k=j+1; k<n_chains; k++){
+                                    Chain[] pair_k = subsetChains.get(k);
+
+                                    //Cases in which k is removed
+                                    //i: ab; j: bc; k: ac
+                                    //i: bc; j: ab; k: ac
+                                    if(pair_i[1].equals(pair_j[0]) &&
+                                       pair_j[1].equals(pair_k[1]) &&
+                                       pair_i[0].equals(pair_k[0]) ||
+                                       pair_i[1].equals(pair_k[1]) &&
+                                       pair_j[1].equals(pair_i[0]) &&
+                                       pair_j[0].equals(pair_k[0])){
+                                        indicesToRemove.add(k);
+                                    }
+                                }
+                            }
+                        }
+                        List<Chain[]> subsetChains_sansTrans = new ArrayList<>();
+                        for(int i=0; i<n_chains; i++){
+                            if(!indicesToRemove.contains(i))
+                                subsetChains_sansTrans.add(subsetChains.get(i));
+                        }
+                        subsetChains = subsetChains_sansTrans;
+                    }
+
+                    //Now, subset chains contain only single-dimensional links
+                    //where if a sub b and b sub c then the a sub c link is removed
+                    Map<String, Set<String>> subSupDict = new HashMap<>();
+                    for(Chain[] pair : subsetChains){
+                        Chain sub = pair[0], sup = pair[1];
+                        if(!subSupDict.containsKey(sub.getID()))
+                            subSupDict.put(sub.getID(), new HashSet<>());
+                        subSupDict.get(sub.getID()).add(sup.getID());
+                    }
+                    for(String subID : subSupDict.keySet())
+                        subsetHist.increment(subSupDict.get(subID).size());
+                }
+                double totalSubsetChains = subsetHist.getSum();
+                for(Integer numSup : subsetHist.getSortedByValKeys(true))
+                    System.out.printf("%d: %d (%.3f%%)\n", numSup,
+                            (int)subsetHist.get(numSup),
+                            100.0 * subsetHist.get(numSup) / totalSubsetChains);
+
+                System.exit(0);
+
+                /*Preprocess.export_phraseLocalization_affinityLists(docSet, "trainAsDev", Overlord.dataPath +
+                        "tacl201708/nn/bryan_affinity/" + dataset + "_trainAsDev");
+                */
                 /*
                 Preprocess.export_relationLabelFile(docSet, Overlord.dataPath +
                         "tacl201708/nn/" + dataset + "_" + split + "_relationLabels");
@@ -251,7 +426,6 @@ public class Overlord
                 Preprocess.export_neuralRelationFiles(docSet, Overlord.dataPath +
                     "tacl201708/nn/" + dataset + "_" + split);*/
 
-                System.exit(0);
 
                 // Julia:   "What percentage of the intra-caption pronominal links
                 //          in the training data have been manually corrected?"
@@ -283,9 +457,6 @@ public class Overlord
                         "tacl201708/nn/bryan_affinity/" + dataset + "_trainAsDev");
                 System.exit(0);
 
-
-                List<Document> docList = new ArrayList<>(docSet);
-                Collections.shuffle(docList);
                 Preprocess.export_neuralRelationFiles(docList.subList(0,
                         (int)(0.2*docSet.size())), Overlord.dataPath +
                         "tacl201708/nn/" + dataset + "_" + split + "_tune");
@@ -1696,10 +1867,12 @@ public class Overlord
                     ClassifyUtil.exportFeatures_affinity(docSet, split);
                 } else if(featsToExtract.equals("nonvis")) {
                     ClassifyUtil.exportFeatures_nonvis(docSet, _outroot,
+                            parser.getBoolean("for_neural"),
                             parser.getBoolean("include_cardinality"),
                             parser.getString("cardinality_scores"));
                 } else if(featsToExtract.equals("card")) {
-                    ClassifyUtil.exportFeatures_cardinality(docSet, _outroot);
+                    ClassifyUtil.exportFeatures_cardinality(docSet, _outroot,
+                            parser.getBoolean("for_neural"));
                 }
             } else if(buildDB != null){
                 System.out.println("WARNING: there's a bug where certain cardinalities are null");
@@ -1722,21 +1895,6 @@ public class Overlord
             String relationFile = parser.getString("relation_scores");
             String affinityFile = parser.getString("affinity_scores");
             String cardinalityFile = parser.getString("cardinality_scores");
-
-            //DELETEME
-            //Alter the docset to only include the rando test docs
-            List<String> ll_tuneCaps = FileIO.readFile_lineList(Overlord.dataPath +
-                    "tacl201708/nn/flickr30k_dev_tune_captions.txt");
-            Set<String> tuneDocIDs = new HashSet<>();
-            for(String tuneCap : ll_tuneCaps){
-                String[] capIdSplit = tuneCap.split("\t");
-                tuneDocIDs.add(capIdSplit[0].split("#")[0]);
-            }
-            Set<Document> docsToKeep = new HashSet<>();
-            for(Document d : docSet)
-                if(tuneDocIDs.contains(d.getID()))
-                    docsToKeep.add(d);
-            docSet = docsToKeep;
 
             //Set up the relation inference module
             ILPInference inf = null;
