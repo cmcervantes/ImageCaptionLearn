@@ -240,15 +240,10 @@ public class Overlord
 
 
                 String raw_root = Overlord.dataPath + "tacl201711/raw/" +
-                        dataset + "_" + split;
-
-                List<Document> docList = new ArrayList<>(docSet);
-                Collections.shuffle(docList);
-                docList = docList.subList(0, (int)(0.2*docSet.size()));
-                raw_root += "_tune";
+                        dataset + "_" + split + "_" + Util.getCurrentDateTime("yyyyMMdd");
 
                 //Preprocess.export_neuralCaptionFile(docList, raw_root);
-                Preprocess.export_neuralRelationFiles(docList, raw_root);
+                Preprocess.export_neuralRelationFiles(docSet, raw_root);
                 //Preprocess.export_neuralNonvisFile(docList, raw_root);
                 System.exit(0);
 
@@ -456,6 +451,11 @@ public class Overlord
                 Preprocess.export_phraseLocalization_affinityLists(docSet, "trainAsDev", Overlord.dataPath +
                         "tacl201708/nn/bryan_affinity/" + dataset + "_trainAsDev");
                 System.exit(0);
+
+                List<Document> docList = new ArrayList<>(docSet);
+                Collections.shuffle(docList);
+                docList = docList.subList(0, (int)(0.2*docSet.size()));
+                raw_root += "_tune";
 
                 Preprocess.export_neuralRelationFiles(docList.subList(0,
                         (int)(0.2*docSet.size())), Overlord.dataPath +

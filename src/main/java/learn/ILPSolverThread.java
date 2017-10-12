@@ -30,7 +30,7 @@ public class ILPSolverThread extends Thread {
 
     private Map<String, Integer> _fixedRelationLinks;
     private Map<String, double[]> _relScores, _cardScores;
-    private Map<String, Double> _affScores;
+    private Map<String, Double> _affScores, _nonvisScores;
     private Map<String, Integer> _relationGraph, _groundingGraph;
 
     private edu.illinois.cs.cogcomp.lbjava.infer.ILPSolver _solver;
@@ -218,6 +218,10 @@ public class ILPSolverThread extends Thread {
         affinityScores.forEach((k, v) -> _affScores.put(k, affinityScores.get(k)[1]));
     }
 
+    public void setNonvisScores(Map<String, Double> nonvisScores)
+    {
+        _nonvisScores = nonvisScores;
+    }
 
     /* Run Methods */
 
@@ -273,12 +277,18 @@ public class ILPSolverThread extends Thread {
             for (int j = i + 1; j < _mentionList.size(); j++) {
                 Mention m_j = _mentionList.get(j);
 
+                double visual_i = 1 - _nonvisScores.get(m_i.getUniqueID());
+                double visual_j = 1 - _nonvisScores.get(m_j.getUniqueID());
+
                 //Add boolean variables for each label, each direction
                 String id_ij = Document.getMentionPairStr(m_i, m_j);
                 String id_ji = Document.getMentionPairStr(m_j, m_i);
                 for (int y = 0; y <= _maxRelationLabel; y++) {
-                    relationIndices[i][j][y] = _addRelationVariable(id_ij, y, 1.0);
-                    relationIndices[j][i][y] = _addRelationVariable(id_ji, y, 1.0);
+                    double coeff = 1.0;
+                    if(y > 0)
+                        coeff = visual_i * visual_j;
+                    relationIndices[i][j][y] = _addRelationVariable(id_ij, y, coeff);
+                    relationIndices[j][i][y] = _addRelationVariable(id_ji, y, coeff);
                 }
 
                 //Add pairwise relation constraints

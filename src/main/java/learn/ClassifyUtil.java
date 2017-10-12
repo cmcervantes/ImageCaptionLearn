@@ -344,15 +344,16 @@ public abstract class ClassifyUtil {
             for(int i=0; i<mentionList.size(); i++){
                 Mention m_i = mentionList.get(i);
                 Mention.PRONOUN_TYPE type_i = m_i.getPronounType();
-                if(type_i == Mention.PRONOUN_TYPE.NONE || type_i == Mention.PRONOUN_TYPE.SEMI){
+                if(forNeural || type_i == Mention.PRONOUN_TYPE.NONE || type_i == Mention.PRONOUN_TYPE.SEMI){
+                    /*
                     if(d.getIsTrain() && m_i.getChainID().equals("0"))
-                        continue;
+                        continue;*/
                     for(int j=i+1; j<mentionList.size(); j++){
                         Mention m_j = mentionList.get(j);
                         Mention.PRONOUN_TYPE type_j = m_j.getPronounType();
-                        if(type_j == Mention.PRONOUN_TYPE.NONE || type_j == Mention.PRONOUN_TYPE.SEMI){
-                            if(d.getIsTrain() && m_j.getChainID().equals("0"))
-                                continue;
+                        if(forNeural || type_j == Mention.PRONOUN_TYPE.NONE || type_j == Mention.PRONOUN_TYPE.SEMI){
+                            /*if(d.getIsTrain() && m_j.getChainID().equals("0"))
+                                continue;*/
                             numValidMentionPairs += 2;
                         }
                     }
@@ -2009,17 +2010,19 @@ public abstract class ClassifyUtil {
                    type_i == Mention.PRONOUN_TYPE.SEMI){
                     //if this is a training document, don't bother training with
                     //nonvisual mentions
+                    /*
                     if(_doc.getIsTrain() && m_i.getChainID().equals("0"))
-                        continue;
+                        continue;*/
 
                     for(int j=i+1; j<mentionList.size(); j++){
                         Mention m_j = mentionList.get(j);
                         Mention.PRONOUN_TYPE type_j = m_j.getPronounType();
                         if(_forNeural || type_j == Mention.PRONOUN_TYPE.NONE ||
                            type_j == Mention.PRONOUN_TYPE.SEMI){
+                            /*
                             if(_doc.getIsTrain() && m_j.getChainID().equals("0"))
                                 continue;
-
+                            */
                             fvSet.add(_getRelationFeatureVector(m_i, m_j));
                             fvSet.add(_getRelationFeatureVector(m_j, m_i));
                         }

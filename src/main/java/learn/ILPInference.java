@@ -25,12 +25,13 @@ public class ILPInference
     private Map<String, Map<String, Integer>> _relationGraphs, _groundingGraphs;
     private Map<String, Document> _docDict;
     private Map<String, Set<Chain>> _predChains;
-    private Set<String> _nonvisMentions;
+    //private Set<String> _nonvisMentions;
     private InferenceType _infType;
-    private boolean _usePredictedNonvis;
-    private Map<String, List<Mention>> _visualMentionDict;
+    //private boolean _usePredictedNonvis;
+    //private Map<String, List<Mention>> _visualMentionDict;
     private Map<String, List<BoundingBox>> _boxDict;
     private Map<String, double[]> _relationScores, _affinityScores, _cardinalityScores;
+    private Map<String, Double> _nonvisScores;
     private Set<String> _failedImgs, _fallbackImgs;
     private String _graphRoot;
     private DoubleDict<String> _groundingAccuracies, _relationAccuracies;
@@ -81,15 +82,24 @@ public class ILPInference
 
         //Determine if we're using predicted nonvis,
         //based on whether we have a file
-        _usePredictedNonvis = false;
-        _nonvisMentions = new HashSet<>();
+        //_usePredictedNonvis = false;
+        //_nonvisMentions = new HashSet<>();
         if(nonvisScoresFile != null){
+            Logger.log("WARNING: nonvis predictions are made during inference");
+            /*
             _usePredictedNonvis = true;
             _loadNonvisMentions(nonvisScoresFile);
 
             //Evaluate the nonvis as well, because why not
             Logger.log("Evaluating nonvis");
             ClassifyUtil.evaluateNonvis(docSet, nonvisScoresFile);
+            */
+
+            _nonvisScores = new HashMap<>();
+            Map<String, double[]> nonvisScoreDict =
+                    ClassifyUtil.readMccScoresFile(nonvisScoresFile);
+            for(String id : nonvisScoreDict.keySet())
+                _nonvisScores.put(id, nonvisScoreDict.get(id)[1]);
         }
 
         //Load and evaluate those scores files
@@ -97,7 +107,7 @@ public class ILPInference
 
         //Store our visual mentions in accordance
         //with our nonvis scheme
-        _visualMentionDict = new HashMap<>();
+        /*_visualMentionDict = new HashMap<>();
         for(Document d : _docDict.values()){
             List<Mention> visualMentions = new ArrayList<>();
             for(Mention m : d.getMentionList()){
@@ -109,7 +119,7 @@ public class ILPInference
             }
             if(!visualMentions.isEmpty())
                 _visualMentionDict.put(d.getID(), visualMentions);
-        }
+        }*/
 
         //store our bounding boxes unless this is a
         //relation inference object
@@ -189,6 +199,7 @@ public class ILPInference
      */
     private void _loadNonvisMentions(String nonvisScoresFile)
     {
+        /*
         Logger.log("WARNING: using new nonvis score file formatting (mcc score format)");
         Map<String, double[]> nonvisScoreDict =
                 ClassifyUtil.readMccScoresFile(nonvisScoresFile);
@@ -201,7 +212,7 @@ public class ILPInference
                         _nonvisMentions.add(id);
                 }
             }
-        }
+        }*/
 
         /*
         BinaryClassifierScoreDict nonvis_scoreDict =
@@ -244,85 +255,6 @@ public class ILPInference
 
     /* Evaluation methods */
 
-    /**Prints a pairwise confusion matrix, such that each row is a gold, undirected
-     * labeling (n|n, b|p, and c|c) and each column is a predicted, undirected labeling;
-     * each cell is the number of mention pairs with links of that pairing, such that row
-     * n|n, column c|n corresponds to the number of mention pairs that have predicted links
-     * coref and null, where their gold links are null and null
-     *
-     * @param predLabelDict
-     */
-    private void _printPairwiseConfusion(Map<String, Integer> predLabelDict)
-    {
-        String[] labels = {"n", "c", "b", "p"};
-        Map<String, DoubleDict<String>> mentionPairTable = new HashMap<>();
-        mentionPairTable.put("n|n", new DoubleDict<>());
-        mentionPairTable.put("c|c", new DoubleDict<>());
-        mentionPairTable.put("b|p", new DoubleDict<>());
-
-        for(Document d : _docDict.values()){
-            Set<String> subsetMentions = d.getSubsetMentions();
-            List<Mention> mentionList = d.getMentionList();
-            for(int i=0; i<mentionList.size(); i++) {
-                Mention m1 = mentionList.get(i);
-
-                for (int j = i + 1; j < mentionList.size(); j++) {
-                    Mention m2 = mentionList.get(j);
-                    boolean nonvisMention = m1.getChainID().equals("0") || m2.getChainID().equals("0");
-
-                    String id_ij = Document.getMentionPairStr(m1, m2);
-                    String id_ji = Document.getMentionPairStr(m2, m1);
-
-                    //get the gold label string
-                    String gold = "n|n";
-                    if(!nonvisMention){
-                        if(m1.getChainID().equals(m2.getChainID())){
-                            gold = "c|c";
-                        } else if(subsetMentions.contains(id_ij) || subsetMentions.contains(id_ji)){
-                            gold = "b|p";
-                        }
-                    }
-
-                    //get the pred label strings if there's not a nonvis here
-                    String pred = "n|n";
-                    if(_usePredictedNonvis){
-                        nonvisMention = _nonvisMentions.contains(m1.getUniqueID()) ||
-                                _nonvisMentions.contains(m2.getUniqueID());
-                    }
-                    if(!nonvisMention){
-                        String pred_ij = predLabelDict.containsKey(id_ij) ? labels[predLabelDict.get(id_ij)] : "n";
-                        String pred_ji = predLabelDict.containsKey(id_ji) ? labels[predLabelDict.get(id_ji)] : "n";
-                        pred = StringUtil.getAlphabetizedPair(pred_ij, pred_ji);
-                    }
-
-                    //increment the table accordingly
-                    mentionPairTable.get(gold).increment(pred);
-                }
-            }
-        }
-        Set<String> predSet = new HashSet<>();
-        for(String gold : mentionPairTable.keySet())
-            predSet.addAll(mentionPairTable.get(gold).keySet());
-        List<String> predList = new ArrayList<>(predSet);
-
-        List<List<String>> table = new ArrayList<>();
-        List<String> columns = new ArrayList<>(predList);
-        columns.add(0, "");
-        table.add(columns);
-        for(String gold : mentionPairTable.keySet()){
-            List<String> row = new ArrayList<>();
-            row.add(gold);
-            for(String pred : predList){
-                int count = (int)mentionPairTable.get(gold).get(pred);
-                double perc = 100.0 * count / mentionPairTable.get(gold).getSum();
-                row.add(String.format("%d (%.1f%%)", count, perc));
-            }
-            table.add(row);
-        }
-        Logger.log("Pairwise confusion");
-        System.out.println(StringUtil.toTableStr(table, true));
-    }
-
     private void _printDocumentScoreDict(Map<Document, ScoreDict<String>> docScoreDict, String filename)
     {
         //store the micro-averaged accuracies and the macro-averaged scores by bin
@@ -333,10 +265,6 @@ public class ILPInference
         for(Document d : docScoreDict.keySet()){
             int numEntities = d.getChainSet().size();
             ScoreDict<String> scores = docScoreDict.get(d);
-            if(d.getID().equals("000000048548.jpg")) {
-                System.out.println("---------000000048548--------");
-                scores.printCompleteScores();
-            }
             macroAverage.increment(scores);
             labelSet.addAll(scores.keySet());
 
@@ -413,8 +341,9 @@ public class ILPInference
             for (Mention m : mentions) {
                 Set<BoundingBox> assocBoxes = d.getBoxSetForMention(m);
                 boolean nonvisMention = m.getChainID().equals("0");
-                if (_usePredictedNonvis)
-                    nonvisMention = _nonvisMentions.contains(m.getUniqueID());
+
+                //if (_usePredictedNonvis)
+                //    nonvisMention = _nonvisMentions.contains(m.getUniqueID());
 
                 boolean foundConflictingLink = false;
                 for (BoundingBox b : boxes) {
@@ -485,9 +414,6 @@ public class ILPInference
             Set<String> subsetMentions = d.getSubsetMentions();
             List<Mention> mentionList = d.getMentionList();
 
-            if(d.getID().equals("000000048548.jpg")) {
-                System.out.println("---------000000048548--------");
-            }
             for (int i = 0; i < mentionList.size(); i++) {
                 Mention m_i = mentionList.get(i);
                 for (int j = i + 1; j < mentionList.size(); j++) {
@@ -498,9 +424,21 @@ public class ILPInference
                     boolean nonvisMention = m_i.getChainID().equals("0") || m_j.getChainID().equals("0");
 
                     String gold = "null";
+
+                    /*
                     if(nonvisMention){
-                        gold = "-nonvis-";
+                        //gold = "-nonvis-";
                     } else {
+                        if(m_i.getChainID().equals(m_j.getChainID())){
+                            gold = "coref";
+                        } else if(subsetMentions.contains(id_ij)) {
+                            gold = "subset_ij";
+                        } else if(subsetMentions.contains(id_ji)){
+                            gold = "subset_ji";
+                        }
+                    }*/
+
+                    if(!nonvisMention){
                         if(m_i.getChainID().equals(m_j.getChainID())){
                             gold = "coref";
                         } else if(subsetMentions.contains(id_ij)) {
@@ -510,6 +448,7 @@ public class ILPInference
                         }
                     }
 
+                    /*
                     //determine if either mention is nonvisual according to our
                     //predicted nonvis scheme
                     boolean predNonvisMention = nonvisMention;
@@ -543,11 +482,23 @@ public class ILPInference
                             //these pronoun links should be null
                             pred = "null";
                         }
-                    }
+                    }*/
 
-                    if(d.getID().equals("000000048548.jpg")) {
-                        System.out.println(m_i.getUniqueID() + "|" + m_j.getUniqueID());
-                        System.out.println(m_i.toString() + " -- " + gold + " (g) |" + pred + " (p) --" + m_j);
+                    String pred = "-invalid-";
+
+                    if(predLabelDict.containsKey(id_ij) && predLabelDict.containsKey(id_ji)){
+                        int pred_ij = predLabelDict.get(id_ij);
+                        int pred_ji = predLabelDict.get(id_ji);
+                        if(pred_ij + pred_ji == 0){
+                            pred = "null";
+                        } else if(pred_ij + pred_ji == 5){
+                            if(pred_ij == 2)
+                                pred = "subset_ij";
+                            else if(pred_ji == 2)
+                                pred = "subset_ji";
+                        } else if(pred_ij == pred_ji && pred_ij == 1){
+                            pred = "coref";
+                        }
                     }
 
                     //Handle subset pairs according to whether the direction
@@ -642,6 +593,7 @@ public class ILPInference
 
                         boolean nonvis_j = m_j.getChainID().equals("0");
 
+                        /*
                         int gold = 0;
                         if(nonvis_j){
                             gold = -1;
@@ -653,13 +605,39 @@ public class ILPInference
                             else if(subsetMentions.contains(id_ji))
                                 gold = 3;
                         }
-
                         boolean predNonvis_j = nonvis_j;
                         if(_usePredictedNonvis){
                             predNonvis_j = _nonvisMentions.contains(m_i.getUniqueID()) ||
                                     _nonvisMentions.contains(m_j.getUniqueID());
+                        }*/
+
+                        int gold = 0;
+                        if(!nonvis_j){
+                            if(m_i.getChainID().equals(m_j.getChainID()))
+                                gold = 1;
+                            else if(subsetMentions.contains(id_ij))
+                                gold = 2;
+                            else if(subsetMentions.contains(id_ji))
+                                gold = 3;
                         }
 
+                        int pred = -1;
+                        if(predLabelDict.containsKey(id_ij) && predLabelDict.containsKey(id_ji)){
+                            int pred_ij = predLabelDict.get(id_ij);
+                            int pred_ji = predLabelDict.get(id_ji);
+                            if(pred_ij + pred_ji == 0){
+                                pred = 0;
+                            } else if(pred_ij + pred_ji == 5){
+                                if(pred_ij == 2)
+                                    pred = 2;
+                                else if(pred_ji == 2)
+                                    pred = 3;
+                            } else if(pred_ij == pred_ji && pred_ij == 1){
+                                pred = 1;
+                            }
+                        }
+
+                        /*
                         int pred = -2;
                         if(predNonvis_j){
                             pred = -1;
@@ -678,7 +656,7 @@ public class ILPInference
                                     pred = 1;
                                 }
                             }
-                        }
+                        }*/
 
                         foundConflict |= gold != pred;
                     }
@@ -720,8 +698,9 @@ public class ILPInference
                 //this is a nonvis mention (according to our scheme)
                 Set<BoundingBox> assocBoxes = d.getBoxSetForMention(m);
                 boolean nonvisMention = m.getChainID().equals("0");
+                /*
                 if(_usePredictedNonvis)
-                    nonvisMention = _nonvisMentions.contains(m.getUniqueID());
+                    nonvisMention = _nonvisMentions.contains(m.getUniqueID());*/
 
                 //Treat all >10 boxes equally
                 int gold = Math.min(assocBoxes.size(), 11);
@@ -862,8 +841,9 @@ public class ILPInference
                 if(!nonvisMention)
                     mentionChainDict_gold.put(m.getUniqueID(), m.getChainID());
 
+                /*
                 if (_usePredictedNonvis)
-                    nonvisMention = _nonvisMentions.contains(m.getUniqueID());
+                    nonvisMention = _nonvisMentions.contains(m.getUniqueID());*/
                 if(!nonvisMention)
                     mentionChainDict_pred.put(m.getUniqueID(), predMentionChainDict.get(m.getUniqueID()));
             }
@@ -920,8 +900,9 @@ public class ILPInference
                 //under this mention's entry
                 List<String> assocBoxIds_pred = new ArrayList<>();
                 boolean nonvisMention = m.getChainID().equals("0");
+                /*
                 if (_usePredictedNonvis)
-                    nonvisMention = _nonvisMentions.contains(m.getUniqueID());
+                    nonvisMention = _nonvisMentions.contains(m.getUniqueID());*/
                 if (!nonvisMention) {
                     for (int o = 0; o < boxes.size(); o++) {
                         BoundingBox b = boxes.get(o);
@@ -960,6 +941,9 @@ public class ILPInference
      */
     private Map<String, Set<Chain>> _buildChainsFromPredLabels(Map<String, Integer> predLabelDict)
     {
+        Logger.log("WARNING: We no longer assume all mentions in the graph are visual; " +
+                "predicted nonvis can appear as singleton chains, rather than being " +
+                "removed from consideration");
         Map<String, Set<Chain>> predChains = new HashMap<>();
         for(Document d : _docDict.values()){
             Map<Mention, String> mentionChainIdDict = new HashMap<>();
@@ -968,19 +952,22 @@ public class ILPInference
             for(int i=0; i<mentions.size(); i++){
                 Mention m_i = mentions.get(i);
                 boolean nonvis_i = m_i.getChainID().equals("0");
+                /*
                 if (_usePredictedNonvis)
                     nonvis_i = _nonvisMentions.contains(m_i.getUniqueID());
                 if(nonvis_i)
-                    continue;
+                    continue;*/
 
                 for(int j=i+1; j<mentions.size(); j++){
                     Mention m_j = mentions.get(j);
 
+                    /*
                     boolean nonvis_j = m_i.getChainID().equals("0");
                     if (_usePredictedNonvis)
                         nonvis_j = _nonvisMentions.contains(m_i.getUniqueID());
                     if(nonvis_j)
                         continue;
+                        */
 
                     String id_ij = Document.getMentionPairStr(m_i, m_j);
                     String id_ji = Document.getMentionPairStr(m_j, m_i);
@@ -1017,10 +1004,11 @@ public class ILPInference
             mentions.removeAll(mentionChainIdDict.keySet());
             for(Mention m : mentions) {
                 boolean nonvis = m.getChainID().equals("0");
+                /*
                 if (_usePredictedNonvis)
                     nonvis = _nonvisMentions.contains(m.getUniqueID());
                 if(nonvis)
-                    continue;
+                    continue;*/
 
                 mentionChainIdDict.put(m, String.valueOf(chainIdx++));
             }
@@ -1037,11 +1025,12 @@ public class ILPInference
 
             //In order to make the display look correct (with nonvisuals)
             //we want to add all predicted nonvisual mentions as chain 0
+            /*
             Chain nonvisChain = new Chain(d.getID(), "0");
             for(Mention m : d.getMentionList())
                 if(_nonvisMentions.contains(m.getUniqueID()))
                     nonvisChain.addMention(m);
-            chainSet.add(nonvisChain);
+            chainSet.add(nonvisChain);*/
 
             if(!chainSet.isEmpty())
                 predChains.put(d.getID(), chainSet);
@@ -1181,20 +1170,25 @@ public class ILPInference
         //Set up the basic thread
         ILPSolverThread thread = null;
         switch(_infType){
-            case RELATION: thread = new ILPSolverThread(_visualMentionDict.get(docID), numSolverThreads);
+            case RELATION: //thread = new ILPSolverThread(_visualMentionDict.get(docID), numSolverThreads);
+                          thread = new ILPSolverThread(_docDict.get(docID).getMentionList(), numSolverThreads);
                 break;
             case GROUNDING:
             case JOINT:
             case JOINT_AFTER_GRND:
             case JOINT_AFTER_REL:
-                thread = new ILPSolverThread(_visualMentionDict.get(docID), _boxDict.get(docID),
-                    _infType, numSolverThreads);
+                //thread = new ILPSolverThread(_visualMentionDict.get(docID), _boxDict.get(docID),
+                //        _infType, numSolverThreads);
+                thread = new ILPSolverThread(_docDict.get(docID).getMentionList(), _boxDict.get(docID),
+                        _infType, numSolverThreads);
         }
 
         //Add the fixed links, if there are any
         if(thread != null && fixedLinks != null && !fixedLinks.isEmpty())
             thread.setFixedRelationLinks(fixedLinks);
 
+        if(!_nonvisScores.isEmpty())
+            thread.setNonvisScores(_nonvisScores);
         if(_infType == RELATION || _infType.toString().contains("JOINT")){
             thread.setRelationScores(_relationScores);
             if(_excludeSubset)
@@ -1263,12 +1257,13 @@ public class ILPInference
 
         /*Perform inference, according to our type*/
         Logger.log("Solving the ILP for " + String.valueOf(_infType) + " inference");
-        if((double)_relationGraphs.keySet().size()/(double)_visualMentionDict.keySet().size() > 0.9 ||
-           (double)_groundingGraphs.keySet().size()/(double)_visualMentionDict.keySet().size() > 0.9){
+        Set<String> documentIDs = _docDict.keySet();
+        if((double)_relationGraphs.keySet().size()/(double)documentIDs.size() > 0.9 ||
+           (double)_groundingGraphs.keySet().size()/(double)documentIDs.size() > 0.9){
             //If this is a run where most (>90%) of our documents have already
             //been solved, we can assume these are the rare, complex cases on
             //which we failed; try them one at a time, using all available threads
-            List<String> docIds = new ArrayList<>(_visualMentionDict.keySet());
+            List<String> docIds = new ArrayList<>(documentIDs);
             docIds.removeAll(_relationGraphs.keySet());
             docIds.removeAll(_groundingGraphs.keySet());
             _infer(docIds, fixedCorefLinks, 1, numThreads);
@@ -1276,7 +1271,7 @@ public class ILPInference
             //If this is simple relation or grounding, we can run one document
             //per thread, giving gurobi one thread, and itll be done relatively
             //quickly
-            List<String> docIds = new ArrayList<>(_visualMentionDict.keySet());
+            List<String> docIds = new ArrayList<>(documentIDs);
             docIds.removeAll(_relationGraphs.keySet());
             docIds.removeAll(_groundingGraphs.keySet());
             _infer(docIds, fixedCorefLinks, numThreads, 1);
@@ -1291,10 +1286,10 @@ public class ILPInference
             String[] complexities = {"simple", "moderate", "complex", "intractable"};
             DoubleDict<String> complexityDict = new DoubleDict<>();
             for(Document d : _docDict.values())
-                if(_visualMentionDict.containsKey(d.getID()))
-                    complexityDict.increment(d.getID(),
-                            d.getMentionList().size() * d.getMentionList().size() +
-                            d.getMentionList().size() * d.getBoundingBoxSet().size());
+                //if(_visualMentionDict.containsKey(d.getID()))
+                complexityDict.increment(d.getID(),
+                        d.getMentionList().size() * d.getMentionList().size() +
+                                d.getMentionList().size() * d.getBoundingBoxSet().size());
             Map<String, List<String>> docIdDict = new HashMap<>();
             for(String complexityStr : complexities)
                 docIdDict.put(complexityStr, new ArrayList<>());

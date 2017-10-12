@@ -172,9 +172,11 @@ public class Preprocess
                 //Skip nonvisual mentions during training _unless_
                 //our hueristic pronominal coref system indicates
                 //they're coreferent with something
+                /*
                 if(d.getIsTrain() && m_i.getChainID().equals("0") &&
                    !predictedPronomMentions.containsKey(m_i))
                     continue;
+                */
 
                 //Skip any mentions which -- for some reason -- have
                 //no alphanumeric characters
@@ -185,9 +187,12 @@ public class Preprocess
                     Mention m_j = mentions.get(j);
                     int[] indices_j = mentionIndices.get(m_j.getUniqueID());
 
+                    /*
                     if(d.getIsTrain() && m_j.getChainID().equals("0") &&
                        !predictedPronomMentions.containsKey(m_j))
                         continue;
+                    */
+
                     if(indices_j == null)
                         continue;
 
@@ -274,9 +279,10 @@ public class Preprocess
 
                     //Get the pairwise label, for the label file
                     boolean nonvisMention = m_i.getChainID().equals("0") || m_j.getChainID().equals("0");
-                    String gold = "disjoint";
+                    String gold = "null";
                     if(nonvisMention){
-                        gold = "nonvis";
+                        //gold = "nonvis";
+                        gold = null;
                     } else {
                         if(label_ij == 1)
                             gold = "coref";
