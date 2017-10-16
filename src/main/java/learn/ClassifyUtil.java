@@ -90,7 +90,7 @@ public abstract class ClassifyUtil {
      * @param freqCutoff
      * @return
      */
-    private static Map<String, Integer> _loadOnehotDict(String filename, int freqCutoff)
+    static Map<String, Integer> loadOnehotDict(String filename, int freqCutoff)
     {
         Map<String, Integer> idxDict = new HashMap<>();
         String[][] table = FileIO.readFile_table(filename);
@@ -113,30 +113,30 @@ public abstract class ClassifyUtil {
         Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
 
         Logger.log("Feature preprocessing (onehot index dictionaries)");
-        _typePairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_typePair_ordered.csv", 1000);
-        _leftPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_leftPair_ordered.csv", 1000);
-        _rightPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_rightPair_ordered.csv", 1000);
-        _headPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_headPair_ordered.csv", 1);
-        _lemmaPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_lemmaPair_ordered.csv", 1);
-        _subjOfPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_subjOfPair_ordered.csv", 1);
-        _objOfPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_objOfPair_ordered.csv", 1);
-        _modifierPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_modifierPair.csv", 1);
-        _numericPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_numericModifierPair.csv", 1);
-        _prepositionPairs = _loadOnehotDict(Overlord.flickr30kResources + "hist_prepositionPair.csv", 1);
-        _heads = _loadOnehotDict(Overlord.flickr30kResources + "hist_head.csv", 1);
-        _modifiers = _loadOnehotDict(Overlord.flickr30kResources + "hist_modifier.csv", 1);
-        _numerics = _loadOnehotDict(Overlord.flickr30kResources + "hist_numericModifier.csv", 1);
-        _prepositions = _loadOnehotDict(Overlord.flickr30kResources + "hist_preposition.csv", 1);
-        _types = _loadOnehotDict(Overlord.flickr30kResources + "hist_type.csv", 1000);
-        _lefts = _loadOnehotDict(Overlord.flickr30kResources + "hist_left.csv", 1000);
-        _rights = _loadOnehotDict(Overlord.flickr30kResources + "hist_right.csv", 1000);
-        _subjOfs = _loadOnehotDict(Overlord.flickr30kResources + "hist_subjOf.csv", 1);
-        _objOfs = _loadOnehotDict(Overlord.flickr30kResources + "hist_objOf.csv", 1);
-        _pronouns = _loadOnehotDict(Overlord.flickr30kResources + "hist_pronoun.csv", 1);
-        _pronounTypes = _loadOnehotDict(Overlord.flickr30kResources + "hist_pronounType.csv", 0);
-        _nonvisuals = _loadOnehotDict(Overlord.flickr30kResources + "hist_nonvisual.csv", 1);
-        _categories = _loadOnehotDict(Overlord.mscocoResources + "hist_cocoCategory.csv", 1000);
-        _categoryPairs = _loadOnehotDict(Overlord.mscocoResources + "hist_cocoCategoryPair.csv", 1000);
+        _typePairs = loadOnehotDict(Overlord.flickr30kResources + "hist_typePair_ordered.csv", 1000);
+        _leftPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_leftPair_ordered.csv", 1000);
+        _rightPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_rightPair_ordered.csv", 1000);
+        _headPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_headPair_ordered.csv", 1);
+        _lemmaPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_lemmaPair_ordered.csv", 1);
+        _subjOfPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_subjOfPair_ordered.csv", 1);
+        _objOfPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_objOfPair_ordered.csv", 1);
+        _modifierPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_modifierPair.csv", 1);
+        _numericPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_numericModifierPair.csv", 1);
+        _prepositionPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_prepositionPair.csv", 1);
+        _heads = loadOnehotDict(Overlord.flickr30kResources + "hist_head.csv", 1);
+        _modifiers = loadOnehotDict(Overlord.flickr30kResources + "hist_modifier.csv", 1);
+        _numerics = loadOnehotDict(Overlord.flickr30kResources + "hist_numericModifier.csv", 1);
+        _prepositions = loadOnehotDict(Overlord.flickr30kResources + "hist_preposition.csv", 1);
+        _types = loadOnehotDict(Overlord.flickr30kResources + "hist_type.csv", 1000);
+        _lefts = loadOnehotDict(Overlord.flickr30kResources + "hist_left.csv", 1000);
+        _rights = loadOnehotDict(Overlord.flickr30kResources + "hist_right.csv", 1000);
+        _subjOfs = loadOnehotDict(Overlord.flickr30kResources + "hist_subjOf.csv", 1);
+        _objOfs = loadOnehotDict(Overlord.flickr30kResources + "hist_objOf.csv", 1);
+        _pronouns = loadOnehotDict(Overlord.flickr30kResources + "hist_pronoun.csv", 1);
+        _pronounTypes = loadOnehotDict(Overlord.flickr30kResources + "hist_pronounType.csv", 0);
+        _nonvisuals = loadOnehotDict(Overlord.flickr30kResources + "hist_nonvisual.csv", 1);
+        _categories = loadOnehotDict(Overlord.mscocoResources + "hist_cocoCategory.csv", 1000);
+        _categoryPairs = loadOnehotDict(Overlord.mscocoResources + "hist_cocoCategoryPair.csv", 1000);
 
         _hypernyms = new ArrayList<>();
         for(String[] row : FileIO.readFile_table(Overlord.flickr30kResources + "hist_hypernym.csv"))
@@ -770,7 +770,7 @@ public abstract class ClassifyUtil {
     {
         String nonvisHistFile = Overlord.flickr30kResources + "hist_nonvisual.csv";
         Logger.log("Loading frequent nonvisual head words from " + nonvisHistFile);
-        Set<String> freqNonvisHeads = _loadOnehotDict(nonvisHistFile, 10).keySet();
+        Set<String> freqNonvisHeads = loadOnehotDict(nonvisHistFile, 10).keySet();
 
         Logger.log("Loading predicted nonvisual score dict from " + nonvisScoresFile);
         Logger.log("WARNING: using new nonvis score file formatting (mcc score format)");

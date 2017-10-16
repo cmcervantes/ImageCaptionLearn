@@ -398,6 +398,55 @@ public class Preprocess
                     i, 100.0 * labelDistro.get(i) / labelDistro.getSum());
     }
 
+
+    /**Exports a mention file mapping the mention's ID to the normalized
+     * caption bounds with cardinality labeling; each line is formatted as
+     *      [m_id]   [m_start],[m_end]   [label]
+     *
+     * @param docSet    Collection of Documents for which files will be
+     *                  generated
+     * @param outroot   Location to which the files should be saved
+     */
+    public static void export_neuralCardinalityFile(Collection<Document> docSet, String outroot)
+    {
+        DoubleDict<Integer> labelDistro = new DoubleDict<>();
+
+        //Strip punctuation tokens from our captions
+        Map<String, List<Token>> normCaptions = stripPunctFromCaptions(docSet);
+
+        //Remap mention boundaries in these new normalized captions
+        Map<String, int[]> mentionIndices = remapMentionBounds(docSet, normCaptions);
+
+        //For each mention, we now have a mapping of IDs to normalized caption indices;
+        //now we want to pair up these mentions
+        List<String> ll_mentionIndices = new ArrayList<>();
+        for(Document d : docSet){
+            for(Mention m : d.getMentionList()){
+                int label = 0;
+                if(!m.getChainID().equals("0"))
+                    label = Math.min(d.getBoxSetForMention(m).size(), 11);
+
+                labelDistro.increment(label);
+
+                //We simply ignore those mentions that don't contain non-punct tokens
+                if(mentionIndices.containsKey(m.getUniqueID())){
+                    int[] indices = mentionIndices.get(m.getUniqueID());
+                    ll_mentionIndices.add(String.format("%s\t%d,%d\t%s",
+                            m.getUniqueID(), indices[0], indices[1], label));
+                }
+            }
+        }
+
+        //Write all of the files
+        FileIO.writeFile(ll_mentionIndices, outroot + "_mentions_card", "txt", false);
+
+        Logger.log("Label Distribution");
+        for(int i=0; i<labelDistro.size(); i++)
+            System.out.printf("%d: %.2f%%\n",
+                    i, 100.0 * labelDistro.get(i) / labelDistro.getSum());
+    }
+
+
     /***** Phrase Localization Functions ****/
 
     /**Exports a box coordinate and image ID file for use with

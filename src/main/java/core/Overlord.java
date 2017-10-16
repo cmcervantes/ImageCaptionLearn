@@ -243,8 +243,10 @@ public class Overlord
                         dataset + "_" + split + "_" + Util.getCurrentDateTime("yyyyMMdd");
 
                 //Preprocess.export_neuralCaptionFile(docList, raw_root);
-                Preprocess.export_neuralRelationFiles(docSet, raw_root);
+                //Preprocess.export_neuralRelationFiles(docSet, raw_root);
                 //Preprocess.export_neuralNonvisFile(docList, raw_root);
+                Preprocess.export_neuralCardinalityFile(docSet, raw_root);
+
                 System.exit(0);
 
 
