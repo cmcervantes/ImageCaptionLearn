@@ -84,6 +84,15 @@ public class Preprocess
         return mentionIndices;
     }
 
+    public static void export_gloveTrainText(Collection<Document> docSet, String outroot)
+    {
+        Map<String, List<Token>> noPunctCaps =  stripPunctFromCaptions(docSet);
+        StringBuilder text = new StringBuilder();
+        for(String capID : noPunctCaps.keySet())
+            text.append(StringUtil.listToString(noPunctCaps.get(capID), " "));
+        FileIO.writeFile(text.toString(), outroot, "txt", false);
+    }
+
     /**Exports a caption file for use with our neural networks, where
      * each caption has all punctuation tokens removed in the fomrat
      *      [img_id]#[cap_idx]      [cap_less_punc]
@@ -123,13 +132,6 @@ public class Preprocess
         //Remap mention boundaries in these new normalized captions
         Map<String, int[]> mentionIndices = remapMentionBounds(docSet, normCaptions);
 
-        //Get the predicted pronominal chains / mentions for unreviewed training
-        //documents
-        Map<Document, Set<Chain>> predictedPronomDict = new HashMap<>();
-        for(Document d : docSet)
-            if(!d.reviewed)
-                predictedPronomDict.put(d, ClassifyUtil.pronominalCorefChains(d, true));
-
         //For each mention, we now have a mapping of IDs to normalized caption indices;
         //now we want to pair up these mentions (with intra-caption and cross-caption
         //mentions being stored separately)
@@ -138,66 +140,39 @@ public class Preprocess
         List<String> ll_mentionPairLabels = new ArrayList<>();
         for(Document d : docSet){
             List<Mention> mentions = d.getMentionList();
-            Set<String> subsetMentions = d.getSubsetMentions();
 
-            //Associate pronominal mentions with their predicted chains
-            Map<Mention, String> predictedPronomMentions = new HashMap<>();
-            if(predictedPronomDict.containsKey(d))
-                for(Chain c : predictedPronomDict.get(d))
-                    for(Mention m : c.getMentionSet())
-                        if(m.getPronounType() != Mention.PRONOUN_TYPE.NONE &&
-                           m.getPronounType() != Mention.PRONOUN_TYPE.SEMI)
-                            predictedPronomMentions.put(m, c.getID());
+            //Get predicted pronominal coref attachments
+            //if this is an unreviewed image
+            Map<Mention, String> pronomCorefDict = new HashMap<>();
+            if(!d.reviewed)
+                for(Mention[] pair : d.getPronomCorefMentions())
+                    pronomCorefDict.put(pair[0], pair[1].getChainID());
 
-            Map<String, Set<Integer>> chainBoxDict = new HashMap<>();
-            for(Chain c : d.getChainSet()){
-                chainBoxDict.put(c.getID(), new HashSet<>());
-                for(BoundingBox b : c.getBoundingBoxSet())
-                    chainBoxDict.get(c.getID()).add(b.getIdx());
-            }
-            Set<Chain[]> subsetChainPairs = d.getSubsetChains();
+            //Create a mapping from chains c_sub to all chains
+            //c_sup for which c_sub is a subset
             Map<String, Set<String>> subsetChainDict = new HashMap<>();
-            for(Chain[] subsetPair : subsetChainPairs){
+            for(Chain[] subsetPair : d.getSubsetChains()){
                 String subID = subsetPair[0].getID();
-                String supID = subsetPair[1].getID();
                 if(!subsetChainDict.containsKey(subID))
                     subsetChainDict.put(subID, new HashSet<>());
-                subsetChainDict.get(subID).add(supID);
+                subsetChainDict.get(subID).add(subsetPair[1].getID());
             }
 
             for(int i=0; i<mentions.size(); i++){
                 Mention m_i = mentions.get(i);
-                int[] indices_i = mentionIndices.get(m_i.getUniqueID());
-
-                //Skip nonvisual mentions during training _unless_
-                //our hueristic pronominal coref system indicates
-                //they're coreferent with something
-                /*
-                if(d.getIsTrain() && m_i.getChainID().equals("0") &&
-                   !predictedPronomMentions.containsKey(m_i))
-                    continue;
-                */
 
                 //Skip any mentions which -- for some reason -- have
                 //no alphanumeric characters
+                int[] indices_i = mentionIndices.get(m_i.getUniqueID());
                 if(indices_i == null)
                     continue;
 
                 for(int j=i+1; j<mentions.size(); j++){
                     Mention m_j = mentions.get(j);
+
                     int[] indices_j = mentionIndices.get(m_j.getUniqueID());
-
-                    /*
-                    if(d.getIsTrain() && m_j.getChainID().equals("0") &&
-                       !predictedPronomMentions.containsKey(m_j))
-                        continue;
-                    */
-
                     if(indices_j == null)
                         continue;
-
-
-
 
                     //Simply store the first and last indices of ij and ji
                     Integer[] indices_ij = {indices_i[0], indices_i[1],
@@ -210,11 +185,14 @@ public class Preprocess
                     String id_ij = Document.getMentionPairStr(m_i, m_j);
                     String id_ji = Document.getMentionPairStr(m_j, m_i);
                     String chainID_i = m_i.getChainID();
+                    if(pronomCorefDict.containsKey(m_i))
+                        chainID_i = pronomCorefDict.get(m_i);
                     String chainID_j = m_j.getChainID();
+                    if(pronomCorefDict.containsKey(m_j))
+                        chainID_j = pronomCorefDict.get(m_j);
                     Set<String> supChains_i = subsetChainDict.get(chainID_i);
                     Set<String> supChains_j = subsetChainDict.get(chainID_j);
                     if(!chainID_i.equals("0") && !chainID_j.equals("0")){
-
                         if(chainID_i.equals(chainID_j)){
                             label_ij = 1;
                             label_ji = 1;
@@ -225,86 +203,20 @@ public class Preprocess
                             label_ji = 2;
                             label_ij = 3;
                         }
-
-                        /*else if(supChains_i != null && supChains_j != null){
-                            Set<String> supIntersect = new HashSet<>(supChains_i);
-                            supIntersect.retainAll(supChains_j);
-                            if(!supIntersect.isEmpty()){
-                                label_ij = 4;
-                                label_ji = 4;
-                            }
-                        }
-                        if(label_ij == 0){
-                            Set<Integer> boxes_i = chainBoxDict.get(chainID_i);
-                            Set<Integer> boxes_j = chainBoxDict.get(chainID_j);
-                            Set<Integer> boxIntersect = new HashSet<>(boxes_i);
-                            boxIntersect.retainAll(boxes_j);
-                            if(!boxes_i.isEmpty() && !boxes_j.isEmpty() && !boxIntersect.isEmpty() &&
-                                boxes_i.size() != boxIntersect.size() && boxes_j.size() != boxIntersect.size()){
-                                if(m_i.getPronounType() != Mention.PRONOUN_TYPE.NONE ||
-                                   m_j.getPronounType() != Mention.PRONOUN_TYPE.NONE ||
-                                   Mention.getLexicalTypeMatch(m_i, m_j) > 0){
-                                    label_ij = 5;
-                                    label_ji = 5;
-                                }
-                            }
-                        }*/
-
-                        /*
-                        if(m_i.getChainID().equals(m_j.getChainID())){
-                            label_ij = 1;
-                            label_ji = 1;
-                        } else if(subsetMentions.contains(id_ij)){
-                            label_ij = 2;
-                            label_ji = 3;
-                        } else if(subsetMentions.contains(id_ji)){
-                            label_ji = 2;
-                            label_ij = 3;
-                        }*/
                     }
-
-
-                    //If this is one of the pronouns that we have a prediction for, this is
-                    //a coref case
-                    if(predictedPronomMentions.containsKey(m_i) &&
-                       predictedPronomMentions.get(m_i).equals(m_j.getChainID()) ||
-                       predictedPronomMentions.containsKey(m_j) &&
-                       predictedPronomMentions.get(m_j).equals(m_i.getChainID())){
-                        label_ij = 1;
-                        label_ji = 1;
-                    }
-
                     labelDistro.increment(label_ij);
                     labelDistro.increment(label_ji);
 
                     //Get the pairwise label, for the label file
                     boolean nonvisMention = m_i.getChainID().equals("0") || m_j.getChainID().equals("0");
                     String gold = "null";
-                    if(nonvisMention){
-                        //gold = "nonvis";
-                        gold = null;
-                    } else {
+                    if(!nonvisMention){
                         if(label_ij == 1)
                             gold = "coref";
                         else if(label_ij == 2)
                             gold = "subsect_ij";
                         else if(label_ij == 3)
                             gold = "subset_ji";
-                        /*
-                        else if(label_ij == 4)
-                            gold = "complement";
-                        else if(label_ij == 5)
-                            gold = "intersect";
-                        */
-
-                        /*
-                        if(m_i.getChainID().equals(m_j.getChainID())){
-                            gold = "coref";
-                        } else if(subsetMentions.contains(id_ij)) {
-                            gold = "subset_ij";
-                        } else if(subsetMentions.contains(id_ji)){
-                            gold = "subset_ji";
-                        }*/
                     }
                     ll_mentionPairLabels.add(String.format("%s %s %s", id_ij, id_ji, gold));
 
@@ -355,29 +267,19 @@ public class Preprocess
         //Remap mention boundaries in these new normalized captions
         Map<String, int[]> mentionIndices = remapMentionBounds(docSet, normCaptions);
 
-        //Get the predicted pronominal chains / mentions for unreviewed training
-        //documents
-        Set<Mention> attachedPronouns = new HashSet<>();
-        for(Document d : docSet){
-            if(!d.reviewed){
-                Set<Chain> pronomChains = ClassifyUtil.pronominalCorefChains(d, true);
-                for(Chain c : pronomChains)
-                    for(Mention m : c.getMentionSet())
-                        if(m.getPronounType() != Mention.PRONOUN_TYPE.NONE &&
-                           m.getPronounType() != Mention.PRONOUN_TYPE.SEMI)
-                            attachedPronouns.add(m);
-            }
-        }
-
         //For each mention, we now have a mapping of IDs to normalized caption indices;
         //now we want to pair up these mentions
         List<String> ll_mentionIndices = new ArrayList<>();
         for(Document d : docSet){
+
+            //Get the attached pronominal mentions for unreviewed images
+            Set<Mention> pronomCorefMentions = new HashSet<>();
+            if(!d.reviewed)
+                for(Mention[] pair : d.getPronomCorefMentions())
+                    pronomCorefMentions.add(pair[0]);
+
             for(Mention m : d.getMentionList()){
-                int nonvis = 0;
-                if(m.getChainID().equals("0"))
-                    if(attachedPronouns.isEmpty() || !attachedPronouns.contains(m))
-                        nonvis = 1;
+                int nonvis = m.getChainID().equals("0") && !pronomCorefMentions.contains(m) ? 1 : 0;
                 labelDistro.increment(nonvis);
 
                 //We simply ignore those mentions that don't contain non-punct tokens
@@ -417,15 +319,29 @@ public class Preprocess
         //Remap mention boundaries in these new normalized captions
         Map<String, int[]> mentionIndices = remapMentionBounds(docSet, normCaptions);
 
-        //For each mention, we now have a mapping of IDs to normalized caption indices;
-        //now we want to pair up these mentions
+        //Associate each mention's new boundaries with its cardinality label
         List<String> ll_mentionIndices = new ArrayList<>();
         for(Document d : docSet){
-            for(Mention m : d.getMentionList()){
-                int label = 0;
-                if(!m.getChainID().equals("0"))
-                    label = Math.min(d.getBoxSetForMention(m).size(), 11);
+            //Get predicted pronominal coref attachments
+            //if this is an unreviewed image
+            Map<Mention, String> pronomCorefDict = new HashMap<>();
+            if(!d.reviewed)
+                for(Mention[] pair : d.getPronomCorefMentions())
+                    pronomCorefDict.put(pair[0], pair[1].getChainID());
 
+            //Map chain IDs to box counts
+            Map<String, Integer> chainBoxCounts = new HashMap<>();
+            for(Chain c : d.getChainSet())
+                chainBoxCounts.put(c.getID(), Math.min(c.getBoundingBoxSet().size(), 11));
+
+            for(Mention m : d.getMentionList()){
+                String chainID = m.getChainID();
+                if(pronomCorefDict.containsKey(m))
+                    chainID = pronomCorefDict.get(m);
+
+                int label = 0;
+                if(!chainID.equals("0"))
+                    label = chainBoxCounts.get(chainID);
                 labelDistro.increment(label);
 
                 //We simply ignore those mentions that don't contain non-punct tokens

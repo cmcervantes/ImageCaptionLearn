@@ -20,15 +20,15 @@ import java.util.Map;
  * large sections of code borrowed from [Dan's group][link].
  * [link]: https://github.com/xiaoling/wikifier/blob/master/src/edu/illinois/cs/cogcomp/lbj/coref/decoders/ILPDecoder.java
  */
-public class ILPSolverThread extends Thread {
-
+public class ILPSolverThread extends Thread
+{
     private String _docID;
     private List<Mention> _mentionList;
     private List<BoundingBox> _boxList;
     private ILPInference.InferenceType _infType;
     private int _solverThreads;
 
-    private Map<String, Integer> _fixedRelationLinks, _fixedVisualMentions;
+    private Map<String, Integer> _fixedRelationLinks, _fixedGroundingLinks, _fixedVisualMentions;
     private Map<String, double[]> _relScores, _cardScores;
     private Map<String, Double> _affScores, _nonvisScores;
     private Map<String, Integer> _relationGraph, _groundingGraph, _visualGraph;
@@ -85,7 +85,9 @@ public class ILPSolverThread extends Thread {
         _infType = infType;
         _solverThreads = solverThreads;
 
-        _fixedRelationLinks = new HashMap<>(); _fixedVisualMentions = new HashMap<>();
+        _fixedRelationLinks = new HashMap<>();
+        _fixedGroundingLinks = new HashMap<>();
+        _fixedVisualMentions = new HashMap<>();
         _relScores = new HashMap<>(); _nonvisScores = new HashMap<>();
         _cardScores = new HashMap<>(); _affScores = new HashMap<>();
 
@@ -174,6 +176,7 @@ public class ILPSolverThread extends Thread {
      * has changed over multiple revisions)
      *
      */
+    @Deprecated
     public void includeTypeConstraint()
     {
         _includeTypeConstraint = true;
@@ -222,6 +225,10 @@ public class ILPSolverThread extends Thread {
      */
     public void setAffinityScores(Map<String, double[]> affinityScores)
     {
+        for(String key : affinityScores.keySet())
+            if(affinityScores.get(key).length < 2)
+                System.out.println(key);
+
         affinityScores.forEach((k, v) -> _affScores.put(k, affinityScores.get(k)[1]));
     }
 
@@ -238,56 +245,63 @@ public class ILPSolverThread extends Thread {
      */
     public void run() {
         switch (_infType) {
-            case RELATION:
-                run_relation();
+            case RELATION: run_relation(false);
                 break;
-            case GROUNDING:
-                run_grounding();
+            case VISUAL_RELATION: run_relation(true);
                 break;
-            case JOINT:
+            case GROUNDING: run_grounding(false);
+                break;
+            case VISUAL_GROUNDING: run_grounding(true);
+                break;
+            case JOINT: run_joint();
+                break;
+            case JOINT_AFTER_VISUAL:
+                _mentionList.forEach(m -> _fixedVisualMentions.put(m.getUniqueID(),
+                        _nonvisScores.get(m.getUniqueID()) > 0.5 ? 0 : 1));
                 run_joint();
                 break;
-            case JOINT_AFTER_REL:
-                run_relation();
+            case JOINT_AFTER_RELATION: run_relation(false);
                 _fixedRelationLinks = new HashMap<>(_relationGraph);
                 _relationGraph = new HashMap<>();
                 run_joint();
                 break;
-            case JOINT_AFTER_GRND:
-                run_grounding();
-                _fixedRelationLinks = new HashMap<>(_groundingGraph);
+            case JOINT_AFTER_GROUNDING: run_grounding(false);
+                _fixedGroundingLinks = new HashMap<>(_groundingGraph);
                 _groundingGraph = new HashMap<>();
                 run_joint();
                 break;
         }
 
-        //If we failed to find a joint solution, find individual solutions
-        if(_infType.toString().contains("JOINT") && !_foundSolution){
+        //If we failed to find a joint solution, find solutions by doing joint
+        //rel/vis and ground/vis
+        if(ILPInference.InferenceType.isFullJointType(_infType) && !_foundSolution){
             _fallbackSolution = true;
             _relationGraph = new HashMap<>(); _groundingGraph = new HashMap<>();
             _resetSolver();
-            run_relation();
-            boolean solvedRelation = _foundSolution;
+            run_grounding(true);
+            boolean solvedGrounding = _foundSolution;
             _resetSolver();
-            run_grounding();
-            _foundSolution &= solvedRelation;
+            run_relation(true);
+            _foundSolution &= solvedGrounding;
         }
     }
 
     /**
      * Sets up and runs the ILP solver for relation inference
      */
-    private void run_relation() {
-        int[][][] relationIndices = new int[_mentionList.size()][_mentionList.size()][_maxRelationLabel +1];
+    private void run_relation(boolean includeVisual) {
         int[] visualIndices = new int[_mentionList.size()];
-        int[] nonvisualIndices = new int[_mentionList.size()];  //TODO: probably delete this; unnecessary
+        int[][][] relationIndices =
+                new int[_mentionList.size()][_mentionList.size()][_maxRelationLabel +1];
         for (int i = 0; i < _mentionList.size(); i++) {
             Mention m_i = _mentionList.get(i);
 
             //Add our predictions that this mention is visual or nonvisual
             //to the objective
-            visualIndices[i] = _addVisualVariable_vis(m_i.getUniqueID());
-            nonvisualIndices[i] = _addVisualVariable_nonvis(m_i.getUniqueID(), visualIndices[i]);
+            if(includeVisual){
+                visualIndices[i] = _addVisualVariable_vis(m_i.getUniqueID());
+                _addVisualVariable_nonvis(m_i.getUniqueID(), visualIndices[i]);
+            }
 
             for (int j = i + 1; j < _mentionList.size(); j++) {
                 Mention m_j = _mentionList.get(j);
@@ -296,17 +310,9 @@ public class ILPSolverThread extends Thread {
                 String id_ij = Document.getMentionPairStr(m_i, m_j);
                 String id_ji = Document.getMentionPairStr(m_j, m_i);
 
-                //Only null relation links add their score to the objective directly;
-                //the visual relations must occur between visual mentions, and thus
-                //r^y_{ij} doesn't add to the objective (y \in {c,b,p}) but
-                //w^y_{ij} -- which is v_i and v_j and r^y_{ij} -- _does_ add
-                // \rho to the objective
                 for (int y = 0; y <= _maxRelationLabel; y++) {
-                    double coeff = 1.0;
-                    if(y > 0)
-                        coeff = 0.0;
-                    relationIndices[i][j][y] = _addRelationVariable(id_ij, y, coeff);
-                    relationIndices[j][i][y] = _addRelationVariable(id_ji, y, coeff);
+                    relationIndices[i][j][y] = _addRelationVariable(id_ij, y, 1.0);
+                    relationIndices[j][i][y] = _addRelationVariable(id_ji, y, 1.0);
                 }
 
                 //Add pairwise relation constraints
@@ -315,11 +321,13 @@ public class ILPSolverThread extends Thread {
         }
 
         //Add visual relation links
-        _addVisualConstraints_relation(visualIndices, relationIndices);
+        if(includeVisual) {
+            _addVisualConstraints_relation(visualIndices, relationIndices);
+            _addVisualConstraints_fixed(visualIndices);
+        }
 
-        //Add fixed links
+        //Add fixed relation links
         _addRelationConstraints_fixed(relationIndices);
-        _addVisualConstraints_fixed(visualIndices);
 
         //Add subset transitivity / entity consistency
         _addRelationConstraints_transitivity(relationIndices);
@@ -331,25 +339,45 @@ public class ILPSolverThread extends Thread {
     /**
      * Sets up and runs the ILP solver for grounding inference
      */
-    private void run_grounding() {
+    private void run_grounding(boolean includeVisual) {
+        int[] visualIndices = new int[_mentionList.size()];
+        int[] nonvisualIndices = new int[_mentionList.size()];
         int[][] groundingIndices = new int[_mentionList.size()][_boxList.size()];
         int[][] antiGroundingIndices = new int[_mentionList.size()][_boxList.size()];
+        int[][] cardIndices = new int[_mentionList.size()][_boxList.size()+1];
         for (int i = 0; i < _mentionList.size(); i++) {
             Mention m_i = _mentionList.get(i);
+
+            //Add our predictions that this mention is visual or nonvisual
+            //to the objective
+            if(includeVisual){
+                visualIndices[i] = _addVisualVariable_vis(m_i.getUniqueID());
+                nonvisualIndices[i] = _addVisualVariable_nonvis(m_i.getUniqueID(), visualIndices[i]);
+            }
+
             int[] groundingIndices_perMention = new int[_boxList.size()];
             for (int o = 0; o < _boxList.size(); o++) {
                 BoundingBox b_g = _boxList.get(o);
                 String id_io = m_i.getUniqueID() + "|" + b_g.getUniqueID();
-                groundingIndices[i][o] = _addGroundingVariable_affinity(id_io);
+                groundingIndices[i][o] = _addGroundingVariable_affinity(id_io, 1.0 / (double)_boxList.size());
                 antiGroundingIndices[i][o] = _addGroundingVariable_antiAffinity(id_io,
                         groundingIndices[i][o]);
                 groundingIndices_perMention[o] = groundingIndices[i][o];
             }
 
             //Add the cardinality variables
-            int[] cardinalityIndices_perMention = _addGroundingVariable_cardinality(m_i.getUniqueID());
-            _addGroundingConstraint_cardinality(groundingIndices_perMention, cardinalityIndices_perMention);
+            cardIndices[i] = _addGroundingVariable_cardinality(m_i.getUniqueID(), 1.0);
+            _addGroundingConstraint_cardinality(groundingIndices_perMention, cardIndices[i]);
         }
+
+        //Add the visual grounding constraints
+        if(includeVisual) {
+            _addVisualConstraints_grounding(nonvisualIndices, cardIndices);
+            _addVisualConstraints_fixed(visualIndices);
+        }
+
+        //Add fixed grounding links
+        _addGroundingConstraints_fixed(groundingIndices);
 
         //Given that we know these are gold boxes, we must
         //assign a box to at least one mention
@@ -360,19 +388,28 @@ public class ILPSolverThread extends Thread {
             _addGroundingConstraints_category(groundingIndices);
 
         //Solve the ILP
-        solveGraph(null, groundingIndices, null);
+        solveGraph(null, groundingIndices, visualIndices);
     }
 
     /**
      * Sets up and runs the ILP solver for combined inference
      */
     private void run_joint() {
-        int[][][] relationIndices = new int[_mentionList.size()][_mentionList.size()][_maxRelationLabel +1];
+        int[] visualIndices = new int[_mentionList.size()];
+        int[] nonvisualIndices = new int[_mentionList.size()];
+        int[][][] relationIndices =
+                new int[_mentionList.size()][_mentionList.size()][_maxRelationLabel +1];
         int[][] groundingIndices = new int[_mentionList.size()][_boxList.size()];
         int[][] antiGroundingIndices = new int[_mentionList.size()][_boxList.size()];
         int[][] cardinalityIndices = new int[_mentionList.size()][_boxList.size() + 1];
         for (int i = 0; i < _mentionList.size(); i++) {
             Mention m_i = _mentionList.get(i);
+
+            //Visual variables
+            visualIndices[i] = _addVisualVariable_vis(m_i.getUniqueID());
+            nonvisualIndices[i] = _addVisualVariable_nonvis(m_i.getUniqueID(), visualIndices[i]);
+
+            //Relation variables
             for (int j = i + 1; j < _mentionList.size(); j++) {
                 Mention m_j = _mentionList.get(j);
 
@@ -380,36 +417,39 @@ public class ILPSolverThread extends Thread {
                 String id_ij = Document.getMentionPairStr(m_i, m_j);
                 String id_ji = Document.getMentionPairStr(m_j, m_i);
                 for (int y = 0; y <= _maxRelationLabel; y++) {
-                    relationIndices[i][j][y] = _addRelationVariable(id_ij, y,
-                            2.0 / _mentionList.size());
-                    relationIndices[j][i][y] = _addRelationVariable(id_ji, y,
-                            2.0 / _mentionList.size());
+                    relationIndices[i][j][y] = _addRelationVariable(id_ij, y, 1.0);
+                    relationIndices[j][i][y] = _addRelationVariable(id_ji, y, 1.0);
                 }
 
                 //Add pairwise relation constraints
                 _addRelationConstraints_pairwise(relationIndices[i][j], relationIndices[j][i]);
             }
 
+            //Grounding variables
             int[] groundingIndices_perMention = new int[_boxList.size()];
             for (int o = 0; o < _boxList.size(); o++) {
                 BoundingBox b_g = _boxList.get(o);
                 String id_io = m_i.getUniqueID() + "|" + b_g.getUniqueID();
-                groundingIndices[i][o] = _addGroundingVariable_affinity(id_io);
+                groundingIndices[i][o] = _addGroundingVariable_affinity(id_io, 1.0 / (2.0 * _boxList.size()));
                 antiGroundingIndices[i][o] = _addGroundingVariable_antiAffinity(id_io,
                         groundingIndices[i][o]);
                 groundingIndices_perMention[o] = groundingIndices[i][o];
             }
-
-            //Add the cardinality variables
-            cardinalityIndices[i] = _addGroundingVariable_cardinality(m_i.getUniqueID());
+            cardinalityIndices[i] = _addGroundingVariable_cardinality(m_i.getUniqueID(), 0.5);
             _addGroundingConstraint_cardinality(groundingIndices_perMention, cardinalityIndices[i]);
         }
 
         //Add grounded relation constraints
         _addJointConstraints(relationIndices, groundingIndices, cardinalityIndices);
 
+        //Add visual constraints
+        _addVisualConstraints_relation(visualIndices, relationIndices);
+        _addVisualConstraints_grounding(nonvisualIndices, cardinalityIndices);
+
         //Add fixed links
+        _addVisualConstraints_fixed(visualIndices);
         _addRelationConstraints_fixed(relationIndices);
+        _addGroundingConstraints_fixed(groundingIndices);
 
         //Add subset transitivity / entity consistency
         _addRelationConstraints_transitivity(relationIndices);
@@ -418,6 +458,9 @@ public class ILPSolverThread extends Thread {
         //assign a box to at least one mention
         if(_includeBoxExigence)
             _addGroundingConstraint_boxExigence(groundingIndices);
+
+        if(_includeTypeConstraint)
+            _addGroundingConstraints_category(groundingIndices);
 
         //Solve the ILP
         solveGraph(relationIndices, groundingIndices, null);
@@ -509,12 +552,11 @@ public class ILPSolverThread extends Thread {
      * @param pairID
      * @return
      */
-    private int _addGroundingVariable_affinity(String pairID)
+    private int _addGroundingVariable_affinity(String pairID, double coeff)
     {
         double score = 0.0;
         if (_affScores.containsKey(pairID))
-            score = _affScores.get(pairID);
-        score /= (double)_boxList.size();
+            score = coeff * _affScores.get(pairID);
         return _solver.addBooleanVariable(score);
     }
 
@@ -546,16 +588,16 @@ public class ILPSolverThread extends Thread {
      * @param mentionID
      * @return
      */
-    private int[] _addGroundingVariable_cardinality(String mentionID)
+    private int[] _addGroundingVariable_cardinality(String mentionID, double coeff)
     {
         int[] indices = new int[_boxList.size() + 1];
         for(int n=0; n<=_boxList.size(); n++){
             double cardScore = 0.0;
             if(_cardScores.containsKey(mentionID)){
                 if(n < 11)
-                    cardScore = _cardScores.get(mentionID)[n];
+                    cardScore = coeff * _cardScores.get(mentionID)[n];
                 else
-                    cardScore = _cardScores.get(mentionID)[11] / (_boxList.size() - 10.0);
+                    cardScore = coeff * _cardScores.get(mentionID)[11] / (_boxList.size() - 10.0);
             }
             indices[n] = _solver.addBooleanVariable(cardScore);
         }
@@ -859,6 +901,31 @@ public class ILPSolverThread extends Thread {
         }
     }
 
+    /**Fixes the set of grounding links, such that inference must operate around
+     * the pre-loaded decisions
+     *
+     * @param groundingIndices
+     */
+    private void _addGroundingConstraints_fixed(int[][] groundingIndices)
+    {
+        //Don't bother going through the loops if we have no fixed links
+        //to add
+        if(_fixedGroundingLinks.isEmpty())
+            return;
+
+        for(int i=0; i<_mentionList.size(); i++){
+            Mention m_i = _mentionList.get(i);
+            for(int o=0; o<_boxList.size(); o++){
+                BoundingBox b_o = _boxList.get(o);
+                String pairID = m_i.getUniqueID() + "|" + b_o.getUniqueID();
+                if(_fixedGroundingLinks.containsKey(pairID)){
+                    _solver.addEqualityConstraint(new int[]{groundingIndices[i][o]},
+                            new double[]{1.0}, (double)_fixedGroundingLinks.get(pairID));
+                }
+            }
+        }
+    }
+
     /**Adds the visual constraints to relation prediction, which add the confidence in
      * a visual relation to the objective only if both mentions involved are visual
      *
@@ -868,39 +935,43 @@ public class ILPSolverThread extends Thread {
     private void _addVisualConstraints_relation(int[] visualIndices, int[][][] relationLinks)
     {
         for (int i = 0; i < _mentionList.size(); i++) {
-            Mention m_i = _mentionList.get(i);
             for (int j = i + 1; j < _mentionList.size(); j++) {
-                Mention m_j = _mentionList.get(j);
-                String id_ij = Document.getMentionPairStr(m_i, m_j);
-                String id_ji = Document.getMentionPairStr(m_j, m_i);
-
                 for (int y = 1; y <= _maxRelationLabel; y++) {
-                    double score_ij = 0.0, score_ji = 0.0;
-                    if(_relScores.containsKey(id_ij))
-                        score_ij = _relScores.get(id_ij)[y];
-                    if(_relScores.containsKey(id_ji))
-                        score_ji = _relScores.get(id_ji)[y];
-
-                    int visRelIdx_ij = _solver.addBooleanVariable(score_ij);
-                    int visRelIdx_ji = _solver.addBooleanVariable(score_ji);
-
-                    _solver.addGreaterThanConstraint(new int[]{visualIndices[i], visualIndices[j],
-                            relationLinks[i][j][y], visRelIdx_ij}, new double[]{1.0, 1.0, 1.0, -3.0},
-                            0.0);
-                    _solver.addLessThanConstraint(new int[]{visualIndices[i], visualIndices[j],
-                            relationLinks[i][j][y], visRelIdx_ij}, new double[]{1.0, 1.0, 1.0, -3.0},
-                            3.0);
-                    _solver.addGreaterThanConstraint(new int[]{visualIndices[i], visualIndices[j],
-                            relationLinks[j][i][y], visRelIdx_ji}, new double[]{1.0, 1.0, 1.0, -3.0},
-                            0.0);
-                    _solver.addLessThanConstraint(new int[]{visualIndices[i], visualIndices[j],
-                            relationLinks[j][i][y], visRelIdx_ji}, new double[]{1.0, 1.0, 1.0, -3.0},
-                            3.0);
+                    //r^y_{ij} may only equal 1 (but may be 0) iff v_i = v_j = 1;
+                    //otherwise a visual relation may not hold. Therefore
+                    //      v_i + v_j >= 2r^y_{ij}
+                    //so, for our purposes
+                    //      v_i + v_j - 2r^y_{ij} >= 0
+                    //      v_i + v_j - 2r^y_{ji} >= 0
+                    //Might not need the second one, given the other
+                    //constraints, but just to be safe...
+                    _solver.addGreaterThanConstraint(new int[]{visualIndices[i],
+                                    visualIndices[j], relationLinks[i][j][y]},
+                            new double[]{1.0, 1.0, -2.0}, 0.0);
+                    _solver.addGreaterThanConstraint(new int[]{visualIndices[i],
+                                    visualIndices[j], relationLinks[j][i][y]},
+                            new double[]{1.0, 1.0, -2.0}, 0.0);
                 }
-
             }
         }
+    }
 
+    /**Adds the visual constraint to grounding that enforces the property
+     * that nonvisual mentions _cannot_ ground to any boxes (cardinality must
+     * equal 0)
+     *
+     * @param nonvisIndices
+     * @param cardinalityIndices
+     */
+    private void _addVisualConstraints_grounding(int[] nonvisIndices,
+                                                 int[][] cardinalityIndices)
+    {
+        //  v^\prime_i \leq z^0_i
+        for(int i=0; i<_mentionList.size(); i++){
+            _solver.addLessThanConstraint(new int[]{nonvisIndices[i],
+                    cardinalityIndices[i][0]}, new double[]{1.0, -1.0},
+                    0.0);
+        }
     }
 
     /**Fixes the set of visual mentions, such that inference must operate around

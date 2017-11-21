@@ -96,7 +96,7 @@ public class Minion
             //(that is, it introduces a new referent) is suspect
             for(Mention m : c.getMentionList()){
                 if(m.getPronounType() != Mention.PRONOUN_TYPE.NONE &&
-                   m.getPronounType() != Mention.PRONOUN_TYPE.SEMI &&
+                   m.getPronounType() != Mention.PRONOUN_TYPE.DEICTIC &&
                    m.getPronounType() != Mention.PRONOUN_TYPE.INDEFINITE){
                     if(chainCounts.get(m.getChainID()) == 1)
                         heterogCapMentions.add(m);
@@ -182,57 +182,6 @@ public class Minion
             }
         }
         return pairCases;
-    }
-
-    /**Given a document, returns a mapping of unordered mention pairs
-     * and their associated gold/pred pronominal coreference labelings;
-     * intended for use both in coreference evaluation
-     *
-     * @param d
-     * @return
-     */
-    public static Map<Mention[], String> filter_pronomCorefEval(Document d)
-    {
-        Map<Mention[], String> pronomCorefPairs = new HashMap<>();
-
-        Set<String> corefPairs_pred = ClassifyUtil.pronominalCoref(d,
-                new HashSet<>(d.getMentionList()));
-        List<Mention> mentions = d.getMentionList();
-        for(int i=0; i<mentions.size(); i++){
-            Mention m_i = mentions.get(i);
-            Mention.PRONOUN_TYPE pType_i = m_i.getPronounType();
-            for(int j=i+1; j<mentions.size(); j++){
-                Mention m_j = mentions.get(j);
-                Mention.PRONOUN_TYPE pType_j = m_j.getPronounType();
-
-                if(m_i.getCaptionIdx() != m_j.getCaptionIdx())
-                    continue;
-
-                String id_ij = Document.getMentionPairStr(m_i, m_j);
-                String id_ji = Document.getMentionPairStr(m_j, m_i);
-
-                if(pType_i != Mention.PRONOUN_TYPE.NONE && pType_i != Mention.PRONOUN_TYPE.SEMI ||
-                   pType_j != Mention.PRONOUN_TYPE.NONE && pType_j != Mention.PRONOUN_TYPE.SEMI){
-
-                    String caseStr = "";
-                    if(m_i.getChainID().equals(m_j.getChainID()))
-                        caseStr = "gold";
-                    if(corefPairs_pred.contains(id_ij) || corefPairs_pred.contains(id_ji)){
-                        if(!caseStr.isEmpty())
-                            caseStr += "_";
-                        caseStr += "pred";
-                    }
-                    if(caseStr.isEmpty())
-                        caseStr = "none";
-
-                    if(!Util.containsArr(pronomCorefPairs.keySet(), new Mention[]{m_i, m_j}) &&
-                       !Util.containsArr(pronomCorefPairs.keySet(), new Mention[]{m_j, m_i})){
-                        pronomCorefPairs.put(new Mention[]{m_i, m_j}, caseStr);
-                    }
-                }
-            }
-        }
-        return pronomCorefPairs;
     }
 
     /**Exports a file at outRoot that contains hypernym branches for

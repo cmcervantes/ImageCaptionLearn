@@ -4,9 +4,11 @@ import learn.*;
 import nlptools.IllinoisAnnotator;
 import nlptools.StanfordAnnotator;
 import out.OutTable;
+import statistical.ScoreDict;
 import structures.*;
 import utilities.*;
 
+import javax.sql.rowset.CachedRowSet;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -45,6 +47,8 @@ public class Overlord
     public static String mscocoResources = mscocoPath + "resources/";
     public static String mscoco_lexicon = mscocoResources + "coco_lex.csv";
     public static String snliPath = "/shared/projects/SNLI/";
+    public static String denotation_sqlite = "/shared/projects/DenotationDB/results_20160121.db";
+
 
 	private static String _outroot;
 
@@ -103,6 +107,9 @@ public class Overlord
         String[] featOpts = {"relation", "affinity", "nonvis", "card"};
         parser.setArgument_opts("--extractFeats", featOpts, null,
                 "Extracts features to --out", "Data");
+        parser.setArgument_opts("--neuralPreproc",
+                new String[]{"caption", "nonvis", "relation", "card"},
+                null, "Exports neural preprocessing files to --out", "Data");
         parser.setArgument_flag("--for_neural", "Whether extracted features are to be "+
                                 "used in conjunction with word embeddings in a neural "+
                                 "network (in practice, turns off various high-dim features)",
@@ -145,20 +152,18 @@ public class Overlord
                 "FILE", "Infer");
         parser.setArgument("--relation_scores",
                 "Pairwise relation scores file; associates mention pair IDs with [0,1] (n,c,b,p) predictions",
-                String.class, "/home/ccervan2/source/data/feats/flickr30kEntities_v2_relation_dev.scores", "FILE",
-                false, "Infer");
+                String.class, null, "FILE", false, "Infer");
         parser.setArgument("--affinity_scores",
                 "Affinity scores file; associates mention|box unique IDs with [0,1] affinity prediction",
-                String.class, "/home/ccervan2/source/data/feats/flickr30kEntities_v2_affinity_dev.scores",
-                "FILE", false, "Infer");
+                String.class, null, "FILE", false, "Infer");
         parser.setArgument("--cardinality_scores",
                 "Cardinality scores file; associates mention unique IDs with [0,1] "+
-                "(0-10,11+) cardinality prediction", String.class,
-                "/home/ccervan2/source/data/feats/flickr30kEntities_v2_box_card_dev.scores",
-                "FILE", false, "Infer");
-        parser.setArgument_opts("--inf_type", new String[]{"relation", "grounding", "joint",
-                                                           "joint_after_rel", "joint_after_grnd"},
-                "relation", "Specified which inference module to use", "Infer");
+                "(0-10,11+) cardinality prediction", String.class, null, "FILE", false, "Infer");
+        parser.setArgument_opts("--inf_type", new String[]{"relation", "grounding",
+                        "visual_relation", "visual_grounding", "joint",
+                        "joint_after_visual", "joint_after_relation",
+                        "joint_after_grounding"}, "relation",
+                        "Specifies which inference module to use", "Infer");
         parser.setArgument_flag("--include_type_constraint", "Enables the inference type constraint", "Infer");
         parser.setArgument_flag("--exclude_subset", "Whether to exclude the subset label "+
                 "during relation / joint inference", "Infer");
@@ -238,6 +243,248 @@ public class Overlord
                 Minion.export_modSubsetFeats(docSet, split);
             } else {
 
+                Mention.initializeLexicons(flickr30k_lexicon, mscoco_lexicon);
+                List<String> cocoCats = new ArrayList<>(Mention.getCOCOCategories());
+                Collections.sort(cocoCats);
+
+                List<String> ll_boxCats = new ArrayList<>();
+                for(Document d : docSet){
+                    for(BoundingBox b : d.getBoundingBoxSet()){
+                        int idx = cocoCats.indexOf(b.getCategory());
+                        Double[] onehot = new Double[cocoCats.size()];
+                        Arrays.fill(onehot, 0.0);
+                        if(idx >= 0)
+                            onehot[idx] = 1.0;
+                        ll_boxCats.add(b.getUniqueID() + "\t" + StringUtil.listToString(onehot, ","));
+                    }
+                }
+                FileIO.writeFile(ll_boxCats, "/home/ccervan2/data/tacl201712/raw/" +
+                                dataset + "_" + split + "_box_cats", "txt", false);
+
+                System.exit(0);
+
+                Mention.initializeLexicons(flickr30k_lexicon, mscoco_lexicon);
+                List<String> ll_mentionBoxLabels = new ArrayList<>();
+                DoubleDict<Integer> boxLabelHist = new DoubleDict<>();
+                for(Document d : docSet){
+                    for(Mention m : d.getMentionList()){
+                        Set<BoundingBox> assocBoxes = d.getBoxSetForMention(m);
+                        Set<String> mentionCats = new HashSet<>();
+                        String mentionCatsStr = Mention.getLexicalEntry_cocoCategory(m, false);
+                        if(mentionCatsStr != null)
+                            mentionCats.addAll(Arrays.asList(mentionCatsStr.split("/")));
+                        for(BoundingBox b : d.getBoundingBoxSet()){
+                            int label = !assocBoxes.isEmpty() && assocBoxes.contains(b) ? 1 : 0;
+                            if(!d.reviewed && !mentionCats.isEmpty() && mentionCats.contains(b.getCategory()))
+                                label = 1;
+
+                            boxLabelHist.increment(label);
+                            ll_mentionBoxLabels.add(m.getUniqueID() + "|" + b.getUniqueID() + "\t" + String.valueOf(label));
+                        }
+                    }
+                }
+                System.out.println(boxLabelHist.toString());
+                FileIO.writeFile(ll_mentionBoxLabels, "/home/ccervan2/data/tacl201712/raw/" +
+                        dataset + "_" + split + "_mention_box_labels_heur", "txt", false);
+
+                System.exit(0);
+
+                List<String> ll_imgIds = new ArrayList<>();
+                docSet.forEach(d -> ll_imgIds.add(d.getID()));
+                FileIO.writeFile(ll_imgIds, dataset + "_" + split + "_imgIDs", "txt");
+                System.exit(0);
+
+
+                ScoreDict<Integer> scores_pronom = new ScoreDict<>();
+                for(Document d : docSet){
+                    Map<Mention, Mention> pronomCorefDict = new HashMap<>();
+                    for(Mention[] pair : d.getPronomCorefMentions())
+                        pronomCorefDict.put(pair[0], pair[1]);
+
+                    for(Caption c : d.getCaptionList()){
+                        List<Mention> mentions = c.getMentionList();
+                        for(int i=0; i<mentions.size(); i++){
+                            //In this computation, m_i must be a pronoun
+                            Mention m_i = mentions.get(i);
+                            if(m_i.getPronounType() == Mention.PRONOUN_TYPE.NONE)
+                                continue;
+
+                            Set<Mention> ante_gold = new HashSet<>();
+                            for(int j=0; j<mentions.size(); j++){
+                                if(j == i)
+                                    continue;
+                                Mention m_j = mentions.get(j);
+                                if(!m_i.getChainID().equals("0") && m_i.getChainID().equals(m_j.getChainID())){
+                                    ante_gold.add(m_j);
+                                }
+                            }
+
+                            //Gold: 0 if no coref mentions; 1 if some coref mentions
+                            //Pred: 0 if no coref mentions; 1 if matching coref mentions;
+                            //      2 if spurious coref mention
+                            int gold = ante_gold.isEmpty() ? 0 : 1;
+                            int pred = 0;
+                            if(pronomCorefDict.containsKey(m_i)){
+                                pred = 2;
+                                if(!ante_gold.isEmpty() && ante_gold.contains(pronomCorefDict.get(m_i)))
+                                    pred = 1;
+                            }
+
+                            /*
+                            for(int j=0; j<mentions.size(); j++){
+                                if(j == i)
+                                    continue;
+                                Mention m_j = mentions.get(j);
+
+                                //Determine if these mentions are
+                                //actually coreferent or predicted coref
+                                int gold = m_i.getChainID().equals(m_j.getChainID()) &&
+                                           !m_i.getChainID().equals("0") ? 1 : 0;
+                                int pred = pronomCorefDict.containsKey(m_i) &&
+                                        pronomCorefDict.get(m_i).equals(m_j) ? 1 : 0;
+                            }*/
+
+                            scores_pronom.increment(gold, pred);
+                        }
+                    }
+                }
+                scores_pronom.printCompleteScores();
+
+                System.exit(0);
+
+
+                DoubleDict<String> imgChainCounts = new DoubleDict<>();
+                for(Document d : docSet){
+                    if(!d.reviewed)
+                        continue;
+
+                    boolean hasNonvis = false;
+                    for(Mention m : d.getMentionList())
+                        hasNonvis |= m.getChainID().equals("0");
+                    boolean hasSubset = !d.getSubsetChains().isEmpty();
+                    if(hasNonvis && hasSubset)
+                        imgChainCounts.increment(d.getID(), d.getChainSet().size());
+                }
+                FileIO.writeFile(imgChainCounts, dataset + "_" + split + "_nonvisSubset", "csv", false);
+
+                System.exit(0);
+
+                Logger.log("Loading data");
+                Map<String, String> semEvalText = XmlIO.readSemEvalText("/shared/projects/SemEval2018/task_dataset/dev-data.xml");
+                Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
+
+                Logger.log("Initializing annotator");
+                IllinoisAnnotator anno = IllinoisAnnotator.createChunker("/home/ccervan2/resources/pos_wsj30k_trainDev/",
+                                                                         "/home/ccervan2/resources/chunk_conll30k_trainDev/");
+
+                Logger.log("Predicting pos tags and chunks");
+                Map<String, List<Caption>> semEvalSentences = new HashMap<>();
+                for(String narrativeID : semEvalText.keySet()){
+                    String text = semEvalText.get(narrativeID);
+                    String[] sentenceArr = anno.splitSentences(text);
+                    semEvalSentences.put(narrativeID, new ArrayList<>());
+                    for(int i=0; i<sentenceArr.length; i++)
+                        semEvalSentences.get(narrativeID).add(anno.predictCaption(narrativeID,
+                                i, sentenceArr[i]));
+                }
+                List<String> ll_semEval = new ArrayList<>();
+                for(String narrativeID : semEvalSentences.keySet())
+                    for(int i=0; i<semEvalSentences.get(narrativeID).size(); i++)
+                        ll_semEval.add(semEvalSentences.get(narrativeID).get(i).toCorefString(true));
+                FileIO.writeFile(ll_semEval, "/shared/projects/SemEval2018/task_dataset/dev_data_preproc", "txt");
+                //IllinoisAnnotator.trainChunker(chunkDir + trainFile, numIter, chunkDir);
+                //IllinoisAnnotator annotator = IllinoisAnnotator.createChunker(chunkDir);
+                //annotator.testChunker_exportToConll(chunkDir + evalFile, chunkDir + outFile);
+
+                System.exit(0);
+
+                /*
+                List<String> ll_scores = FileIO.readFile_lineList("/home/ccervan2/data/tacl201711/neural_affinity/flickr30k_test_logScore.csv");
+                List<String> ll_ids = FileIO.readFile_lineList("/home/ccervan2/data/tacl201711/neural_affinity/flickr30k_test_id.txt");
+                List<String> ll_labels =FileIO.readFile_lineList("/home/ccervan2/data/tacl201711/neural_affinity/flickr30k_test_label.txt");
+                ScoreDict<Integer> affinityScores = new ScoreDict<>();
+                List<String> ll_mccFile = new ArrayList<>();
+                for(int i=0; i<ll_ids.size(); i++){
+                    double score = Math.exp(Double.parseDouble(ll_scores.get(i)));
+                    String ID = ll_ids.get(i);
+                    int gold = Integer.parseInt(ll_labels.get(i));
+                    int pred = score >= 0.5 ? 1 : 0;
+                    affinityScores.increment(gold, pred);
+                    ll_mccFile.add(String.format("%s,%f,%f", ID, Math.log(1.0-score), Math.log(score)));
+                }
+                System.out.println(affinityScores.getAccuracy());
+                affinityScores.printCompleteScores();
+                FileIO.writeFile(ll_mccFile, "/home/ccervan2/data/tacl201711/scores/flickr30k_test_affinity", "scores", false);
+
+                        //Preprocess.export_gloveTrainText(docSet, dataset + "_" + split + "_gloveText");
+                System.exit(0);
+                */
+
+
+                DBConnector denoConn = new DBConnector(denotation_sqlite);
+                Map<Integer, String> nodeDict = new HashMap<>();
+                Map<Integer, Set<String>> denoDict = new HashMap<>();
+                DBConnector flickrConn =new DBConnector(flickr30k_sqlite);
+                Set<String> imageIDs = new HashSet<>();
+                try{
+                    System.out.println("Getting image IDs");
+                    CachedRowSet rs = flickrConn.query("SELECT img_id FROM image WHERE cross_val=1;");
+                    while(rs.next()){
+                        imageIDs.add(rs.getString("img_id"));
+                    }
+
+                    System.out.println("Getting nodes");
+                    rs = denoConn.query("SELECT node_id, node_str FROM node;");
+                    while(rs.next()){
+                        nodeDict.put(rs.getInt("node_id"), rs.getString("node_str"));
+                    }
+                    System.out.println("Getting denotations; dropping non-train images");
+                    rs = denoConn.query("SELECT node_id, image_id FROM node_denotation;");
+                    while(rs.next()){
+                        int nodeID = rs.getInt("node_id");
+                        String imgID = rs.getString("image_id");
+
+                        //Skip non-train images
+                        if(!imageIDs.contains(imgID))
+                            continue;
+
+                        //If we haven't seen this node before (and it references a
+                        //non-train image) add it
+                        if(!denoDict.containsKey(nodeID))
+                            denoDict.put(nodeID, new HashSet<>());
+                        denoDict.get(nodeID).add(rs.getString("image_id"));
+                    }
+                } catch(Exception ex){
+                    Logger.log(ex);
+                    System.exit(1);
+                }
+                List<String> ll_deno = new ArrayList<>();
+                for(Integer nodeID : nodeDict.keySet()){
+                    String phrase = nodeDict.get(nodeID);
+                    Set<String> images = denoDict.get(nodeID);
+                    ll_deno.add(phrase + "\t" + StringUtil.listToString(images, " "));
+                }
+                FileIO.writeFile(imageIDs, "/shared/projects/SemEval2018/denotation/flickr30k_train_imgIDs", "txt", false);
+                FileIO.writeFile(ll_deno, "/shared/projects/SemEval2018/denotation/flickr30k_train_denotations", "txt", false);
+
+                System.exit(0);
+
+                Logger.log("Opening chunker");
+                IllinoisAnnotator chnkr =
+                        IllinoisAnnotator.createChunker(Overlord.dataPath + "chunk/");
+
+                Logger.log("Opening training data");
+                Map<String, String> semEvalData = XmlIO.readSemEvalText("/shared/projects/SemEval2018/task_dataset/train-data.xml");
+                Map<String, Caption[]> semEvalCaptions = new HashMap<>();
+                for(String semevalID : semEvalData.keySet()){
+                    String[] sentences = chnkr.splitSentences(semEvalData.get(semevalID));
+                    Caption[] captions = new Caption[sentences.length];
+                    for(int i=0; i<sentences.length; i++)
+                        captions[i] = chnkr.predictCaption(semevalID, i, sentences[i]);
+                    semEvalCaptions.put(semevalID, captions);
+                }
+
+                System.exit(0);
 
                 String raw_root = Overlord.dataPath + "tacl201711/raw/" +
                         dataset + "_" + split + "_" + Util.getCurrentDateTime("yyyyMMdd");
@@ -434,7 +681,7 @@ public class Overlord
                         for(Mention m : mentions){
                             String label = isReviewed ? "reviewed" : "orig";
                             if(m.getPronounType() == Mention.PRONOUN_TYPE.NONE ||
-                               m.getPronounType() == Mention.PRONOUN_TYPE.SEMI){
+                               m.getPronounType() == Mention.PRONOUN_TYPE.DEICTIC){
                                 label = "nonpronom_" + label;
                             } else {
                                 label = "pronom_" + label;
@@ -1851,6 +2098,8 @@ public class Overlord
         } else if(argList.contains("Data")) {
             String featsFileToConvert = parser.getString("convert_to_arff");
             String featsToExtract = parser.getString("extractFeats");
+            String neuralPreproc = parser.getString("neuralPreproc");
+            String ccaPreproc = parser.getString("ccaPreproc");
             String buildDB = parser.getString("buildDB");
 
 
@@ -1876,6 +2125,19 @@ public class Overlord
                     ClassifyUtil.exportFeatures_cardinality(docSet, _outroot,
                             parser.getBoolean("for_neural"));
                 }
+            } else if(neuralPreproc != null){
+                switch(neuralPreproc){
+                    case "caption": Preprocess.export_neuralCaptionFile(docSet, _outroot);
+                        break;
+                    case "relation": Preprocess.export_neuralRelationFiles(docSet, _outroot);
+                        break;
+                    case "nonvis": Preprocess.export_neuralNonvisFile(docSet, _outroot);
+                        break;
+                    case "card": Preprocess.export_neuralCardinalityFile(docSet, _outroot);
+                        break;
+                }
+            } else if(ccaPreproc != null){
+
             } else if(buildDB != null){
                 System.out.println("WARNING: there's a bug where certain cardinalities are null");
                 if(buildDB.equals("mysql")){
@@ -1893,44 +2155,18 @@ public class Overlord
         } else if(argList.contains("Learn")) {
 
         } else if(argList.contains("Infer")) {
-            String nonvisFile = parser.getString("nonvis_scores");
-            String relationFile = parser.getString("relation_scores");
-            String affinityFile = parser.getString("affinity_scores");
-            String cardinalityFile = parser.getString("cardinality_scores");
-
             //Set up the relation inference module
-            ILPInference inf = null;
             ILPInference.InferenceType infType =
                     ILPInference.InferenceType.valueOf(parser.getString("inf_type").toUpperCase());
-            switch(infType){
-                case RELATION: inf = new ILPInference(docSet, infType, nonvisFile, relationFile,
-                        null, null, parser.getString("graph_root"),
-                        parser.getBoolean("include_type_constraint"),
-                        parser.getBoolean("exclude_box_exigence"),
-                        parser.getBoolean("exclude_subset"));
-                    break;
-                case GROUNDING: inf = new ILPInference(docSet, infType, nonvisFile, null,
-                        affinityFile, cardinalityFile, parser.getString("graph_root"),
-                        parser.getBoolean("include_type_constraint"),
-                        parser.getBoolean("exclude_box_exigence"),
-                        parser.getBoolean("exclude_subset"));
-                    break;
-                case JOINT:
-                case JOINT_AFTER_REL:
-                case JOINT_AFTER_GRND:
-                        inf = new ILPInference(docSet, infType, nonvisFile, relationFile,
-                        affinityFile, cardinalityFile, parser.getString("graph_root"),
-                        parser.getBoolean("include_type_constraint"),
-                        parser.getBoolean("exclude_box_exigence"),
-                        parser.getBoolean("exclude_subset"));
-                    break;
-            }
-
-
-            if(inf== null){
-                Logger.log(new Exception("Could not create relation inference module"));
-                System.exit(1);
-            }
+            ILPInference inf = new ILPInference(docSet, infType,
+                    parser.getString("nonvis_scores"),
+                    parser.getString("relation_scores"),
+                    parser.getString("affinity_scores"),
+                    parser.getString("cardinality_scores"),
+                    parser.getString("graph_root"),
+                    parser.getBoolean("include_type_constraint"),
+                    parser.getBoolean("exclude_box_exigence"),
+                    parser.getBoolean("exclude_subset"));
 
             //Do inference
             inf.infer(numThreads);

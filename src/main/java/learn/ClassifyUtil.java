@@ -344,14 +344,14 @@ public abstract class ClassifyUtil {
             for(int i=0; i<mentionList.size(); i++){
                 Mention m_i = mentionList.get(i);
                 Mention.PRONOUN_TYPE type_i = m_i.getPronounType();
-                if(forNeural || type_i == Mention.PRONOUN_TYPE.NONE || type_i == Mention.PRONOUN_TYPE.SEMI){
+                if(forNeural || type_i == Mention.PRONOUN_TYPE.NONE || type_i == Mention.PRONOUN_TYPE.DEICTIC){
                     /*
                     if(d.getIsTrain() && m_i.getChainID().equals("0"))
                         continue;*/
                     for(int j=i+1; j<mentionList.size(); j++){
                         Mention m_j = mentionList.get(j);
                         Mention.PRONOUN_TYPE type_j = m_j.getPronounType();
-                        if(forNeural || type_j == Mention.PRONOUN_TYPE.NONE || type_j == Mention.PRONOUN_TYPE.SEMI){
+                        if(forNeural || type_j == Mention.PRONOUN_TYPE.NONE || type_j == Mention.PRONOUN_TYPE.DEICTIC){
                             /*if(d.getIsTrain() && m_j.getChainID().equals("0"))
                                 continue;*/
                             numValidMentionPairs += 2;
@@ -519,18 +519,7 @@ public abstract class ClassifyUtil {
         _exportFeatures_singleMention(docSet, outroot, "cardinality",
                                       forNeural, false, null);
     }
-
-    public static void exportFeatures_combined(Collection<Document> docSet, String outRoot)
-    {
-        _exportFeatures_singleMention(docSet, outRoot, "combined", false, false, null);
-    }
-
-    public static void exportFeatures_phase1(Collection<Document> docSet, String outRoot)
-    {
-        _exportFeatures_singleMention(docSet, outRoot, "phase_1", false, false, null);
-    }
-
-
+    
     /**Exports features representing a single mention (since we're double dipping with some of these);
      * labelType \in {'nonvis', 'boxCard'}
      *
@@ -565,31 +554,31 @@ public abstract class ClassifyUtil {
         Logger.log("Extracting features");
         Set<FeatureVector> fvSet = new HashSet<>();
         for(Document d : docSet) {
-            for (Mention m : d.getMentionList()) {
-                //if this is an unreviewed pronominal mention during nonvis train,
-                //skip it (since these annotations are unreliable)
-                if(labelType.equals("nonvis") && !d.reviewed &&
-                   m.getPronounType() != Mention.PRONOUN_TYPE.NONE)
-                    continue;
+            //Get predicted pronominal coref attachments
+            //if this is an unreviewed image
+            Map<Mention, String> pronomCorefDict = new HashMap<>();
+            if(!d.reviewed)
+                for(Mention[] pair : d.getPronomCorefMentions())
+                    pronomCorefDict.put(pair[0], pair[1].getChainID());
 
+            //Map chain IDs to box counts
+            Map<String, Integer> chainBoxCounts = new HashMap<>();
+            for(Chain c : d.getChainSet())
+                chainBoxCounts.put(c.getID(), Math.min(c.getBoundingBoxSet().size(), 11));
+            chainBoxCounts.put("0", 0);
+            
+            for (Mention m : d.getMentionList()) {
                 FeatureVector fv = new FeatureVector();
                 fv.comments = m.getUniqueID();
+                
+                String chainID = m.getChainID();
+                if(pronomCorefDict.containsKey(m))
+                    chainID = pronomCorefDict.get(m);
+                
                 switch(labelType){
-                    case "nonvis": fv.label = m.getChainID().equals("0") ? 1.0 : 0.0;
+                    case "nonvis": fv.label = chainID.equals("0") ? 1.0 : 0.0;
                         break;
-                    case "cardinality": fv.label = Math.min(d.getBoxSetForMention(m).size(), 11);
-                        break;
-                    case "combined":
-                        fv.label = m.getChainID().equals("0") ? -1.0 :
-                                Math.min(d.getBoxSetForMention(m).size(), 11);
-                        break;
-                    case "phase_1":
-                        if(m.getChainID().equals("0"))
-                            fv.label = 0.0;
-                        else if(d.getBoxSetForMention(m).isEmpty())
-                            fv.label = 1.0;
-                        else
-                            fv.label = 2.0;
+                    case "cardinality": fv.label = chainBoxCounts.get(chainID);
                         break;
                 }
                 int currentIdx = 1;
@@ -693,7 +682,7 @@ public abstract class ClassifyUtil {
                 _addMetaEntry("isPlural", currentIdx, metaDict);
                 currentIdx++;
                 int f_isSemi = m.getPronounType() ==
-                        Mention.PRONOUN_TYPE.SEMI ? TRUE : FALSE;
+                        Mention.PRONOUN_TYPE.DEICTIC ? TRUE : FALSE;
                 fv.addFeature(currentIdx, f_isSemi);
                 _addMetaEntry("isSemi", currentIdx, metaDict);
                 currentIdx++;
@@ -751,11 +740,11 @@ public abstract class ClassifyUtil {
         List<String> ll_scores = FileIO.readFile_lineList(filename);
         Map<String, double[]> mccScores = new HashMap<>();
         for(String line : ll_scores) {
-            String[] linePars = line.split(",");
-            double[] scores = new double[linePars.length-1];
-            for(int i=1; i<linePars.length; i++)
-                scores[i-1] = Math.exp(Double.parseDouble(linePars[i]));
-            mccScores.put(linePars[0], scores);
+            String[] lineParts = line.split(",");
+            double[] scores = new double[lineParts.length-1];
+            for(int i=1; i<lineParts.length; i++)
+                scores[i-1] = Math.exp(Double.parseDouble(lineParts[i]));
+            mccScores.put(lineParts[0], scores);
         }
         return mccScores;
     }
@@ -946,7 +935,7 @@ public abstract class ClassifyUtil {
     {
         String outDir = "out/pronom/";
         for(Document d : docSet) {
-            Set<Chain> predChainSet = pronominalCorefChains(d, predictPronom);
+            Set<Chain> predChainSet = d.getPronomCorefChains();
 
             //Write the key file
             List<String> lineList_key = d.toConll2012();
@@ -1176,286 +1165,6 @@ public abstract class ClassifyUtil {
             }
         }
         return ll_affinity;
-    }
-
-    /**Evaluates the pronominal coreference system, where the score dict
-     * is computed over all the links where at least one mention is
-     * fully pronominal
-     *
-     * @param docSet
-     * @return
-     */
-    public static ScoreDict<Integer> evaluatePronomCoref(Collection<Document> docSet,
-         BinaryClassifierScoreDict nonvisualScoreDict)
-    {
-        ScoreDict<Integer> scores = new ScoreDict<>();
-        for(Document d : docSet){
-            List<Mention> mentions = d.getMentionList();
-
-            //get the set of visual mentions (either predicted or gold)
-            Set<Mention> visualMentions = new HashSet<>();
-            for(Mention m : mentions){
-                boolean isNonvis = m.getChainID().equals("0");
-                if(nonvisualScoreDict != null){
-                    Double nonvisScore = nonvisualScoreDict.get(m);
-                    isNonvis = nonvisScore != null && nonvisScore > 0;
-                }
-                if(!isNonvis)
-                    visualMentions.add(m);
-            }
-
-            Set<String> pronomCoref = pronominalCoref(d, visualMentions);
-            for(int i=0; i<mentions.size(); i++) {
-                Mention m_i = mentions.get(i);
-                Mention.PRONOUN_TYPE pType_i = m_i.getPronounType();
-                for (int j = i + 1; j < mentions.size(); j++) {
-                    Mention m_j = mentions.get(j);
-                    Mention.PRONOUN_TYPE pType_j = m_j.getPronounType();
-
-                    //We only care about same-caption links where one end is a pronoun
-                    if(m_i.getCaptionIdx() != m_j.getCaptionIdx())
-                        continue;
-                    if(pType_i != Mention.PRONOUN_TYPE.NONE && pType_i != Mention.PRONOUN_TYPE.SEMI ||
-                       pType_j != Mention.PRONOUN_TYPE.NONE && pType_j != Mention.PRONOUN_TYPE.SEMI){
-                        int gold = !m_i.getChainID().equals("0") &&
-                                   m_i.getChainID().equals(m_j.getChainID()) ? 1 : 0;
-
-                        String id_ij = Document.getMentionPairStr(m_i, m_j);
-                        String id_ji = Document.getMentionPairStr(m_j, m_i);
-                        int pred = pronomCoref.contains(id_ij) ||
-                                   pronomCoref.contains(id_ji) ? 1 : 0;
-
-                        scores.increment(gold, pred);
-                    }
-                }
-            }
-        }
-        return scores;
-    }
-
-    /**Performs heuristic pronominal coreference resolution, according
-     * to the following:
-     *
-     * 1) Subject / Object pronouns
-     *      - Attach to the furthest antecedent; preference to animate
-     * 2) Reflexive / Reciprocal
-     *      - Attach to the nearest antecedent; preference to animate
-     * 3) Relative
-     *      - Exclude X if Y in XofY; attach to nearest
-     *      - Attach to S if in [R] [to be / like] [S] construction
-     * 4) Indefinite
-     *      - No attachment
-     * 5) "both", "all", and "it" refer to the nearest antecedent
-     *
-     * @param d
-     * @return
-     */
-    public static Set<String> pronominalCoref(Document d, Collection<Mention> visualMentions)
-    {
-        String[] singMods = {"one", "1", "first", "second", "third"};
-        String[] undefPronom = {"that", "which", "who", "whom", "what"};
-        String[] identityTerms = {"to be", "like"};
-
-        Set<String> corefPairs = new HashSet<>();
-        for(Caption c : d.getCaptionList()) {
-
-            List<Mention> mentions = c.getMentionList();
-            for(int i=0; i<mentions.size(); i++){
-                Mention m_pronom = mentions.get(i);
-                Mention.PRONOUN_TYPE pronounType = m_pronom.getPronounType();
-                Boolean pluralPronom =
-                        Mention.PRONOUN_TYPE.getIsPlural(m_pronom.toString().toLowerCase());
-
-                //if this isn't a full pronoun, we need not concern ourselves
-                if(pronounType == Mention.PRONOUN_TYPE.NONE || pronounType == Mention.PRONOUN_TYPE.SEMI)
-                    continue;
-
-                //Now that we know m_i is a pronoun, we're going to collect
-                //all mentions (left and right) that could be candidates
-                List<Mention> leftCandidates = new ArrayList<>(), rightCandidates = new ArrayList<>();
-                for(int j=0; j<mentions.size(); j++){
-                    if(j == i)
-                        continue;
-
-                    Mention m_j = mentions.get(j);
-
-                    //if this isn't one of the visual mentions, bail
-                    if(!visualMentions.contains(m_j))
-                        continue;
-
-                    //If we've already added this pairing, ignore it now
-                    String id_ij = Document.getMentionPairStr(m_pronom, m_j);
-                    String id_ji = Document.getMentionPairStr(m_j, m_pronom);
-                    if(corefPairs.contains(id_ij) || corefPairs.contains(id_ji))
-                        continue;
-
-                    //Only add non-pronominal mentions
-                    if(m_j.getPronounType() != Mention.PRONOUN_TYPE.NONE)
-                        continue;
-
-                    //Determine mention j's plurality
-                    String[] mods = m_j.getModifiers();
-                    boolean plural_j = false;
-                    if(m_j.getHead().getPosTag().equals("NNS") ||
-                       m_j.getHead().getPosTag().equals("NNPS")){
-                        plural_j = true;
-                    } else if(!mods[0].isEmpty() &&
-                              !Arrays.asList(singMods).contains(mods[0])) {
-                        plural_j = true;
-                    }
-                    if(getGenderMatch(m_pronom, m_j)){
-                        //The underdefined pronouns match everything; other candidates
-                        //must have matching plurality
-                        if(Arrays.asList(undefPronom).contains(m_pronom.toString().toLowerCase()) ||
-                           pluralPronom != null && (pluralPronom && plural_j || !pluralPronom && !plural_j)){
-                            if(j < i)
-                                leftCandidates.add(m_j);
-                            else if(j > i)
-                                rightCandidates.add(m_j);
-                        }
-                    }
-                }
-
-                Mention[] pair = null;
-
-                /* 1) Subjective / Objective */
-                if ((pronounType == Mention.PRONOUN_TYPE.SUBJECTIVE_SINGULAR ||
-                    pronounType == Mention.PRONOUN_TYPE.SUBJECTIVE_PLURAL ||
-                    pronounType == Mention.PRONOUN_TYPE.OBJECTIVE_SINGULAR ||
-                    pronounType == Mention.PRONOUN_TYPE.OBJECTIVE_PLURAL) &&
-                    !leftCandidates.isEmpty()) {
-
-                    //Furthest antecedent is left, index 0
-                    Mention ante = leftCandidates.get(0);
-                    //Prefer people/animal antecedents, where available
-                    for(int j=0; j<leftCandidates.size(); j++){
-                        Mention m_j = leftCandidates.get(j);
-                        if(m_j.getLexicalType().contains("people") || m_j.getLexicalType().contains("animals")){
-                            ante = m_j; break;
-                        }
-                    }
-                    pair = new Mention[]{ante, m_pronom};
-                } /* 2) Reflexive */
-                else if ((pronounType == Mention.PRONOUN_TYPE.REFLEXIVE_SINGULAR ||
-                        pronounType == Mention.PRONOUN_TYPE.REFLEXIVE_PLURAL ||
-                        pronounType == Mention.PRONOUN_TYPE.RECIPROCAL) &&
-                        !leftCandidates.isEmpty()) {
-                    //Nearest antecedent is left, max idx
-                    Mention ante = leftCandidates.get(leftCandidates.size()-1);
-                    //Prefer people/animal antecedents, where available
-                    for(int j=leftCandidates.size()-1; j>= 0; j--){
-                        Mention m_j = leftCandidates.get(j);
-                        if(m_j.getLexicalType().contains("people") || m_j.getLexicalType().contains("animals")){
-                            ante = m_j; break;
-                        }
-                    }
-                    pair = new Mention[]{ante, m_pronom};
-                } /* 3) Relative */
-                else if (pronounType == Mention.PRONOUN_TYPE.RELATIVE || m_pronom.toString().equals("that")) {
-                    Mention m_left = null;
-                    List<Token> interstl_left = new ArrayList<>();
-                    if(!leftCandidates.isEmpty()){
-                        m_left = leftCandidates.get(leftCandidates.size()-1);
-                        interstl_left = c.getInterstitialTokens(m_left, m_pronom);
-                    }
-                    Mention m_right = null;
-                    List<Chunk> interstl_right = new ArrayList<>();
-                    if(!rightCandidates.isEmpty()){
-                        m_right = rightCandidates.get(0);
-                        interstl_right = c.getInterstitialChunks(m_pronom, m_right);
-                    }
-
-                    //If this is Y in XofY, drop X
-                    if(interstl_left.size() == 1 && interstl_left.get(0).toString().equals("of") &&
-                       leftCandidates.size() > 1){
-                        m_left = leftCandidates.get(leftCandidates.size()-2);
-                    }
-
-                    //Determine if this is one of our identity cases
-                    boolean identityCase = false;
-                    if(interstl_right.size() == 1){
-                        String chunkType = interstl_right.get(0).getChunkType();
-                        String chunkStr = interstl_right.get(0).toString().toLowerCase();
-                        identityCase = chunkType.equals("VP") &&
-                                (StringUtil.containsElement(Arrays.asList(identityTerms), chunkStr) ||
-                                chunkStr.equals("is") || chunkStr.equals("are"));
-                    }
-
-                    //Either attach on the right because we're an identity case,
-                    //or attach left if we have a valid antecedent
-                    if(identityCase){
-                        pair = new Mention[]{m_pronom, m_right};
-                    } else if(m_left != null) {
-                        pair = new Mention[]{m_left, m_pronom};
-                    }
-                } /* 4) Other */
-                else if (pronounType == Mention.PRONOUN_TYPE.OTHER && !leftCandidates.isEmpty()) {
-                    pair = new Mention[]{leftCandidates.get(leftCandidates.size()-1), m_pronom};
-                }
-
-                if(pair != null){
-                    corefPairs.add(Document.getMentionPairStr(pair[0], pair[1]));
-                    corefPairs.add(Document.getMentionPairStr(pair[1], pair[0]));
-                }
-            }
-        }
-        return corefPairs;
-    }
-
-    public static Set<Chain> pronominalCorefChains(Document d, boolean predictPronom)
-    {
-        Map<Mention, String> mentionChainDict = new HashMap<>();
-
-        //Get the visual, nonpronominal mentions for this document
-        List<Mention> mentions = d.getMentionList();
-        Set<Mention> visualMentions = new HashSet<>();
-        for(Mention m : mentions)
-            if(m.getPronounType() == Mention.PRONOUN_TYPE.NONE && !m.getChainID().equals("0"))
-                visualMentions.add(m);
-
-        //Perform coref
-        if(predictPronom){
-            Set<String> pronomCorefPairs = ClassifyUtil.pronominalCoref(d, visualMentions);
-
-            //Get the actual chain associations, given those pairs
-            for(int i=0; i<mentions.size(); i++){
-                Mention m_i = mentions.get(i);
-                for(int j=i+1; j<mentions.size(); j++){
-                    Mention m_j = mentions.get(j);
-                    String id_ij = Document.getMentionPairStr(m_i, m_j);
-                    String id_ji = Document.getMentionPairStr(m_j, m_i);
-                    if(pronomCorefPairs.contains(id_ij) || pronomCorefPairs.contains(id_ji)) {
-                        if(m_i.getPronounType() != Mention.PRONOUN_TYPE.NONE &&
-                                m_i.getPronounType() != Mention.PRONOUN_TYPE.SEMI)
-                            mentionChainDict.put(m_i, m_j.getChainID());
-                        else
-                            mentionChainDict.put(m_j, m_i.getChainID());
-                    }
-                }
-            }
-        }
-
-        //For every nonpronominal mention, add its chain; unassociated
-        //pronouns should have no chain (for this comparison)
-        for(int i=0; i<mentions.size(); i++){
-            Mention m = mentions.get(i);
-            if(!mentionChainDict.containsKey(m) && !m.getChainID().equals("0") &&
-                    (m.getPronounType() == Mention.PRONOUN_TYPE.SEMI ||
-                            m.getPronounType() == Mention.PRONOUN_TYPE.NONE)){
-                mentionChainDict.put(m, m.getChainID());
-            }
-        }
-
-        //Construct predicted chains
-        Map<String, Set<Mention>> predChainDict = Util.invertMap(mentionChainDict);
-        Set<Chain> predChainSet = new HashSet<>();
-        for(String chainID : predChainDict.keySet()){
-            Chain c = new Chain(d.getID(), chainID);
-            for(Mention m : predChainDict.get(chainID))
-                c.addMention(m);
-            predChainSet.add(c);
-        }
-        return predChainSet;
     }
 
     /**Performs attribute attachment, associating animate mentions (as keys) with
@@ -1761,51 +1470,6 @@ public abstract class ClassifyUtil {
         return constructionList;
     }
 
-    /**Returns an alphabetized list of strings in the given filename
-     * that occur more than thresh times; originally implemented to
-     * help produce one-hot vectors
-     *
-     * @param filename
-     * @param thresh
-     * @return
-     */
-    private static List<String> _getOneHotList(String filename, int thresh)
-    {
-        List<String> strList = new ArrayList<>();
-        String[][] table = FileIO.readFile_table(filename);
-        for(String[] row : table)
-            if(Double.parseDouble(row[1]) > thresh)
-                strList.add(row[0]);
-        Collections.sort(strList);
-        return strList;
-    }
-
-    public static boolean getGenderMatch(Mention m1, Mention m2)
-    {
-        String gender_1 = m1.getGender();
-        String gender_2 = m2.getGender();
-        return gender_1.equals(gender_2) || gender_1.equals("neuter") ||
-                gender_2.equals("neuter");
-    }
-
-    /**Returns whether the lexical types for m1 and m2 intersect
-     *
-     *
-     * @param m1
-     * @param m2
-     * @return
-     */
-    public static boolean getTypeMatch(Mention m1, Mention m2)
-    {
-        Set<String> typeSet_1 =
-                new HashSet<>(Arrays.asList(m1.getLexicalType().split("/")));
-        Set<String> typeSet_2 =
-                new HashSet<>(Arrays.asList(m2.getLexicalType().split("/")));
-        Set<String> intersection = new HashSet<>(typeSet_1);
-        intersection.retainAll(typeSet_2);
-        return intersection.size() > 0;
-    }
-
     /**Adds the given item to the given feature vector as
      * a one-hot vector representation, such that the index
      * idxOffset + idxDict[item] = 1; Also adds the range of
@@ -1905,13 +1569,12 @@ public abstract class ClassifyUtil {
         private static Map<String, Object> _metaDict = new HashMap<>();
         private static final String[] _identityTerms = {"to be", "like"};
         private Document _doc;
-        private Set<String> _subsetMentions;
-        private Set<String> _partOfMentions;
         private Map<String, double[]> _cardScores;
         private boolean _includeCard;
         private boolean _forNeural;
         private Map<String, Set<Integer>> _chainBoxDict;
         private Map<String, Set<String>> _subsetChainDict;
+        private Map<Mention, String> _pronomCorefChainDict;
         Collection<FeatureVector> fvSet;
 
 
@@ -1927,7 +1590,7 @@ public abstract class ClassifyUtil {
         RelationExtractionThread(Document doc, boolean forNeural, boolean includeSubset,
                                  boolean includePartOf, boolean includeCard,
                                  Map<String, double[]> cardScores)
-        {
+         {
             init(doc, forNeural, includeSubset, includePartOf,
                  includeCard, cardScores);
         }
@@ -1943,16 +1606,9 @@ public abstract class ClassifyUtil {
         {
             _doc = doc;
             fvSet = new HashSet<>();
-            _subsetMentions = new HashSet<>();
-            _partOfMentions = new HashSet<>();
             _includeCard = includeCard;
             _forNeural = forNeural;
 
-            //Vary what we load into memory based on the labeling scheme
-            if(includeSubset)
-                _subsetMentions = _doc.getSubsetMentions();
-            if(includePartOf)
-                _partOfMentions = _doc.getPartOfMentions();
 
             //incorporate cardinality scores, if applicable
             _cardScores = new HashMap<>();
@@ -1979,13 +1635,22 @@ public abstract class ClassifyUtil {
 
             //Associate chains with all of their supersets
             _subsetChainDict = new HashMap<>();
-            for(Chain[] subsetPair : _doc.getSubsetChains()){
-                String subID = subsetPair[0].getID();
-                String supID = subsetPair[1].getID();
-                if(!_subsetChainDict.containsKey(subID))
-                    _subsetChainDict.put(subID, new HashSet<>());
-                _subsetChainDict.get(subID).add(supID);
+            if(includeSubset){
+                for(Chain[] subsetPair : _doc.getSubsetChains()){
+                    String subID = subsetPair[0].getID();
+                    String supID = subsetPair[1].getID();
+                    if(!_subsetChainDict.containsKey(subID))
+                        _subsetChainDict.put(subID, new HashSet<>());
+                    _subsetChainDict.get(subID).add(supID);
+                }
             }
+
+            //Associate pronouns with predicted coref chains
+            //if this is an unreviewed document
+            _pronomCorefChainDict = new HashMap<>();
+            if(!_doc.reviewed)
+                for(Mention[] pair : _doc.getPronomCorefMentions())
+                    _pronomCorefChainDict.put(pair[0], pair[1].getChainID());
         }
 
         /**Returns the meta-dict for these relation features
@@ -2005,86 +1670,43 @@ public abstract class ClassifyUtil {
             List<Mention> mentionList = _doc.getMentionList();
             for(int i=0; i<mentionList.size(); i++){
                 Mention m_i = mentionList.get(i);
-                Mention.PRONOUN_TYPE type_i = m_i.getPronounType();
-                if(_forNeural || type_i == Mention.PRONOUN_TYPE.NONE ||
-                   type_i == Mention.PRONOUN_TYPE.SEMI){
-                    //if this is a training document, don't bother training with
-                    //nonvisual mentions
-                    /*
-                    if(_doc.getIsTrain() && m_i.getChainID().equals("0"))
-                        continue;*/
-
-                    for(int j=i+1; j<mentionList.size(); j++){
-                        Mention m_j = mentionList.get(j);
-                        Mention.PRONOUN_TYPE type_j = m_j.getPronounType();
-                        if(_forNeural || type_j == Mention.PRONOUN_TYPE.NONE ||
-                           type_j == Mention.PRONOUN_TYPE.SEMI){
-                            /*
-                            if(_doc.getIsTrain() && m_j.getChainID().equals("0"))
-                                continue;
-                            */
-                            fvSet.add(_getRelationFeatureVector(m_i, m_j));
-                            fvSet.add(_getRelationFeatureVector(m_j, m_i));
-                        }
-                    }
+                for(int j=i+1; j<mentionList.size(); j++){
+                    Mention m_j = mentionList.get(j);
+                    fvSet.add(_getRelationFeatureVector(m_i, m_j));
+                    fvSet.add(_getRelationFeatureVector(m_j, m_i));
                 }
             }
         }
 
-
+        /**Returns the [0,3] label for this ordered mention pair
+         *
+         * @param m_i
+         * @param m_j
+         * @return
+         */
         private int _getLabel(Mention m_i, Mention m_j)
         {
             String chainID_i = m_i.getChainID();
+            if(_pronomCorefChainDict.containsKey(m_i))
+                chainID_i = _pronomCorefChainDict.get(m_i);
             String chainID_j = m_j.getChainID();
+            if(_pronomCorefChainDict.containsKey(m_j))
+                chainID_j = _pronomCorefChainDict.get(m_j);
 
-            //Nonvisual mentions have disjoint links
-            if(chainID_i.equals("0") || chainID_j.equals("0"))
-                return 0;
+            //Nonvisual mentions have null links
+            if(!chainID_i.equals("0") && !chainID_j.equals("0")){
+                //Coreferent mentions are label 1
+                if(chainID_i.equals(chainID_j))
+                    return 1;
 
-            //Coreferent mentions are label 1
-            if(chainID_i.equals(chainID_j))
-                return 1;
-
-            //Subset mentions are 2 and 3, respectively
-            Set<String> supChains_i = _subsetChainDict.get(chainID_i);
-            Set<String> supChains_j = _subsetChainDict.get(chainID_j);
-            if(supChains_i != null && supChains_i.contains(chainID_j))
-                return 2;
-            if(supChains_j != null && supChains_j.contains(chainID_i))
-                return 3;
-
-            /*
-            //Complement is a symmetric link between entities that
-            //belong to the same superset but are not otherwise
-            //related
-            if(supChains_i != null && supChains_j != null){
-                Set<String> supIntersect = new HashSet<>(supChains_i);
-                supIntersect.retainAll(supChains_j);
-                if(!supIntersect.isEmpty())
-                    return 4;
+                //Subset mentions are 2 and 3, respectively
+                Set<String> supChains_i = _subsetChainDict.get(chainID_i);
+                Set<String> supChains_j = _subsetChainDict.get(chainID_j);
+                if(supChains_i != null && supChains_i.contains(chainID_j))
+                    return 2;
+                if(supChains_j != null && supChains_j.contains(chainID_i))
+                    return 3;
             }
-
-            //Intersecting links occur when two entities share some boxes and
-            //the same lexical type (non pronominal mentions only) but do not
-            //share all their boxes
-            Set<Integer> boxes_i = _chainBoxDict.get(chainID_i);
-            Set<Integer> boxes_j = _chainBoxDict.get(chainID_j);
-            //If both these mentions have boxes...
-            if(!boxes_i.isEmpty() && !boxes_j.isEmpty()){
-                Set<Integer> boxIntersect = new HashSet<>(boxes_i);
-                boxIntersect.retainAll(boxes_j);
-                //...and their box sets intersect but do not subsume one another...
-                if(!boxIntersect.isEmpty() && boxes_i.size() > boxIntersect.size() &&
-                   boxes_j.size() > boxIntersect.size()){
-                    if(m_i.getPronounType() != Mention.PRONOUN_TYPE.NONE ||
-                       m_j.getPronounType() != Mention.PRONOUN_TYPE.NONE ||
-                       Mention.getLexicalTypeMatch(m_i, m_j) > 0){
-                        return 5;
-                    }
-                }
-            }*/
-
-            //All other cases are disjoint, or 0
             return 0;
         }
 
@@ -2316,8 +1938,8 @@ public abstract class ClassifyUtil {
             _addMetaEntry("is_obj_j", currentIdx++, _metaDict);
 
             //features for semi-pronouns
-            Integer f_semiPronom_1 = m1.getPronounType() == Mention.PRONOUN_TYPE.SEMI ? TRUE : FALSE;
-            Integer f_semiPronom_2 = m2.getPronounType() == Mention.PRONOUN_TYPE.SEMI ? TRUE : FALSE;
+            Integer f_semiPronom_1 = m1.getPronounType() == Mention.PRONOUN_TYPE.DEICTIC ? TRUE : FALSE;
+            Integer f_semiPronom_2 = m2.getPronounType() == Mention.PRONOUN_TYPE.DEICTIC ? TRUE : FALSE;
             Caption cap1 = _doc.getCaption(m1.getCaptionIdx());
             Caption cap2 = _doc.getCaption(m2.getCaptionIdx());
             Integer f_xOfY_1 = FALSE, f_xOfY_2 = FALSE;
@@ -2423,57 +2045,55 @@ public abstract class ClassifyUtil {
             _addMetaEntry("in_list_j", currentIdx++, _metaDict);
 
             //neural features, meant to encode the rule based pronominal coref
-            if(_forNeural) {
-                int f_isAnimate_i = m1.getLexicalType().contains("people") ||
-                        m1.getLexicalType().contains("animals") ? 1 : 0;
-                int f_isAnimate_j = m2.getLexicalType().contains("people") ||
-                        m2.getLexicalType().contains("animals") ? 1 : 0;
-                featureList.add(f_isAnimate_i);
-                featureList.add(f_isAnimate_j);
-                _addMetaEntry("isAnimate_i", currentIdx++, _metaDict);
-                _addMetaEntry("isAnimate_j", currentIdx++, _metaDict);
-                int f_isThat_i = m1.toString().equalsIgnoreCase("that") ? 1 : 0;
-                int f_isThat_j = m2.toString().equalsIgnoreCase("that") ? 1 : 0;
-                featureList.add(f_isThat_i);
-                featureList.add(f_isThat_j);
-                _addMetaEntry("isThat_i", currentIdx++, _metaDict);
-                _addMetaEntry("isThat_j", currentIdx++, _metaDict);
+            int f_isAnimate_i = m1.getLexicalType().contains("people") ||
+                    m1.getLexicalType().contains("animals") ? 1 : 0;
+            int f_isAnimate_j = m2.getLexicalType().contains("people") ||
+                    m2.getLexicalType().contains("animals") ? 1 : 0;
+            featureList.add(f_isAnimate_i);
+            featureList.add(f_isAnimate_j);
+            _addMetaEntry("isAnimate_i", currentIdx++, _metaDict);
+            _addMetaEntry("isAnimate_j", currentIdx++, _metaDict);
+            int f_isThat_i = m1.toString().equalsIgnoreCase("that") ? 1 : 0;
+            int f_isThat_j = m2.toString().equalsIgnoreCase("that") ? 1 : 0;
+            featureList.add(f_isThat_i);
+            featureList.add(f_isThat_j);
+            _addMetaEntry("isThat_i", currentIdx++, _metaDict);
+            _addMetaEntry("isThat_j", currentIdx++, _metaDict);
 
-                int f_iToBej = FALSE;
-                int f_iOfj = FALSE;
-                if (m1.getCaptionIdx() == m2.getCaptionIdx() && m1.getIdx() < m2.getIdx()) {
-                    List<Chunk> interstitialChunks =
-                            _doc.getCaption(m1.getCaptionIdx()).getInterstitialChunks(m1, m2);
-                    List<Token> interstitialTokens =
-                            _doc.getCaption(m1.getCaptionIdx()).getInterstitialTokens(m1, m2);
-                    if (interstitialChunks.size() == 1) {
-                        String intrstlChunkType = interstitialChunks.get(0).getChunkType();
-                        String intrstlChunkStr = interstitialChunks.get(0).toString().toLowerCase();
-                        f_iToBej = intrstlChunkType.equals("VP") &&
-                                (StringUtil.containsElement(Arrays.asList(_identityTerms), intrstlChunkStr) ||
-                                        intrstlChunkStr.equals("is") || intrstlChunkStr.equals("are")) ? TRUE : FALSE;
-                    }
-                    if (interstitialTokens.size() == 1 &&
-                            interstitialTokens.get(0).toString().equalsIgnoreCase("of")) {
-                        f_iOfj = TRUE;
-                    }
+            int f_iToBej = FALSE;
+            int f_iOfj = FALSE;
+            if (m1.getCaptionIdx() == m2.getCaptionIdx() && m1.getIdx() < m2.getIdx()) {
+                List<Chunk> interstitialChunks =
+                        _doc.getCaption(m1.getCaptionIdx()).getInterstitialChunks(m1, m2);
+                List<Token> interstitialTokens =
+                        _doc.getCaption(m1.getCaptionIdx()).getInterstitialTokens(m1, m2);
+                if (interstitialChunks.size() == 1) {
+                    String intrstlChunkType = interstitialChunks.get(0).getChunkType();
+                    String intrstlChunkStr = interstitialChunks.get(0).toString().toLowerCase();
+                    f_iToBej = intrstlChunkType.equals("VP") &&
+                            (StringUtil.containsElement(Arrays.asList(_identityTerms), intrstlChunkStr) ||
+                                    intrstlChunkStr.equals("is") || intrstlChunkStr.equals("are")) ? TRUE : FALSE;
                 }
-                featureList.add(f_iToBej);
-                featureList.add(f_iOfj);
-                _addMetaEntry("iToBej", currentIdx++, _metaDict);
-                _addMetaEntry("iOfj", currentIdx++, _metaDict);
-
-                int f_isFirstInCap_i = m1.getIdx() == 0 ? TRUE : FALSE;
-                int f_isFirstInCap_j = m2.getIdx() == 0 ? TRUE : FALSE;
-                int f_adjacent_ij = m1.getCaptionIdx() == m2.getCaptionIdx() &&
-                                    m1.getIdx() + 1 == m2.getIdx() ? TRUE : FALSE;
-                featureList.add(f_isFirstInCap_i);
-                featureList.add(f_isFirstInCap_j);
-                featureList.add(f_adjacent_ij);
-                _addMetaEntry("isFirstInCap_i", currentIdx++, _metaDict);
-                _addMetaEntry("isFirstInCap_j", currentIdx++, _metaDict);
-                _addMetaEntry("adjacent_ij", currentIdx++, _metaDict);
+                if (interstitialTokens.size() == 1 &&
+                        interstitialTokens.get(0).toString().equalsIgnoreCase("of")) {
+                    f_iOfj = TRUE;
+                }
             }
+            featureList.add(f_iToBej);
+            featureList.add(f_iOfj);
+            _addMetaEntry("iToBej", currentIdx++, _metaDict);
+            _addMetaEntry("iOfj", currentIdx++, _metaDict);
+
+            int f_isFirstInCap_i = m1.getIdx() == 0 ? TRUE : FALSE;
+            int f_isFirstInCap_j = m2.getIdx() == 0 ? TRUE : FALSE;
+            int f_adjacent_ij = m1.getCaptionIdx() == m2.getCaptionIdx() &&
+                    m1.getIdx() + 1 == m2.getIdx() ? TRUE : FALSE;
+            featureList.add(f_isFirstInCap_i);
+            featureList.add(f_isFirstInCap_j);
+            featureList.add(f_adjacent_ij);
+            _addMetaEntry("isFirstInCap_i", currentIdx++, _metaDict);
+            _addMetaEntry("isFirstInCap_j", currentIdx++, _metaDict);
+            _addMetaEntry("adjacent_ij", currentIdx++, _metaDict);
 
             //new subset features
             int f_hasArticle_i = _articles.contains(m1.getTokenList().get(0).toString().toLowerCase()) ? TRUE : FALSE;
@@ -2529,9 +2149,9 @@ public abstract class ClassifyUtil {
             _addMetaEntry("isPlural_i", currentIdx++, _metaDict);
             _addMetaEntry("isPlural_j", currentIdx++, _metaDict);
             int f_isSemi_i = m1.getPronounType() ==
-                    Mention.PRONOUN_TYPE.SEMI ? TRUE : FALSE;
+                    Mention.PRONOUN_TYPE.DEICTIC ? TRUE : FALSE;
             int f_isSemi_j = m2.getPronounType() ==
-                    Mention.PRONOUN_TYPE.SEMI ? TRUE : FALSE;
+                    Mention.PRONOUN_TYPE.DEICTIC ? TRUE : FALSE;
             featureList.add(f_isSemi_i);
             featureList.add(f_isSemi_j);
             _addMetaEntry("isSemi_i", currentIdx++, _metaDict);
@@ -2650,57 +2270,12 @@ public abstract class ClassifyUtil {
                     _rightPairs, "right_pair_onehot", _metaDict);
             currentIdx = _addOneHotVector(cocoCat_1 + "|" + cocoCat_2, fv, currentIdx,
                     _categoryPairs, "categoryPair_onehot", _metaDict);
-            if(_forNeural){
-                String pronomType_i = m1.getPronounType().toString();
-                currentIdx = _addOneHotVector(pronomType_i, fv, currentIdx,
-                        _pronounTypes, "pronoun_type_i_onehot", _metaDict);
-                String pronomType_j = m1.getPronounType().toString();
-                currentIdx = _addOneHotVector(pronomType_j, fv, currentIdx,
-                        _pronounTypes, "pronoun_type_j_onehot", _metaDict);
-            }
-
-            //We treat hypernyms as -- not a onehot -- but a bag-of-words;
-            //Given core concepts, we keep a vector where entry ij
-            //is 1 if one of the mentions has concept i in its senses hypernyms
-            //and the other has concept j
-            //UPDATE: This never worked very well; toss if
-            /*
-            int start = currentIdx;
-            Set<String> hypSet_1 = _hypDict.get(lemma_1);
-            Set<String> hypSet_2 = _hypDict.get(lemma_2);
-            for(int i=0; i<_hypernyms.size(); i++){
-                String hyp_i = _hypernyms.get(i);
-                for(int j=i; j<_hypernyms.size(); j++){
-                    String hyp_j = _hypernyms.get(j);
-
-                    if(hypSet_1.contains(hyp_i) && hypSet_2.contains(hyp_j) ||
-                       hypSet_1.contains(hyp_j) && hypSet_2.contains(hyp_i))
-                        fv.addFeature(currentIdx, 1.0);
-                    currentIdx++;
-                }
-            }
-            _addMetaEntry("hypernym_bow", start, currentIdx, _metaDict);
-            */
-
-            //Finally, add a four-way label indicating if these mentions are
-            //coreferent, subset, or null\
-
-            /*
-            Integer label = 0;
-            if(!m1.getChainID().equals("0") && !m2.getChainID().equals("0")){
-               String id_ij = Document.getMentionPairStr(m1, m2);
-               String id_ji = Document.getMentionPairStr(m2, m1);
-                if(m1.getChainID().equals(m2.getChainID()))
-                    label = 1;
-                else if(_subsetMentions.contains(id_ij))
-                    label = 2;  //subset relation; assumes other
-                                //vector from this pair will be 3
-                else if(_subsetMentions.contains(id_ji))
-                    label = 3; //Superset relation; assumes other
-                               //vector from this pair will be 2
-                else if(_partOfMentions.contains(id_ij))
-                    label = 4; //Part of relations are asymmetrical
-            }*/
+            String pronomType_i = m1.getPronounType().toString();
+            currentIdx = _addOneHotVector(pronomType_i, fv, currentIdx,
+                    _pronounTypes, "pronoun_type_i_onehot", _metaDict);
+            String pronomType_j = m1.getPronounType().toString();
+            currentIdx = _addOneHotVector(pronomType_j, fv, currentIdx,
+                    _pronounTypes, "pronoun_type_j_onehot", _metaDict);
 
             _addMetaEntry("max_idx", currentIdx+1, _metaDict);
             fv.label = _getLabel(m1, m2);

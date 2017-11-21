@@ -11,8 +11,8 @@ import utilities.*;
 import java.io.File;
 import java.util.*;
 
-import static learn.ILPInference.InferenceType.GROUNDING;
 import static learn.ILPInference.InferenceType.RELATION;
+import static learn.ILPInference.InferenceType.VISUAL_RELATION;
 
 /**The ILPInference class provides static
  * functions for computing and reporting the 
@@ -162,7 +162,18 @@ public class ILPInference
             _evaluateVisual(predLabelDict_heur, "heuristic");
 
             //Log the results of our classifier
-            _nonvisScores.forEach((k,v) -> predLabelDict_vis.put(k, v <= 0.5 ? 1 : 0));
+            _nonvisScores.forEach((k,v) -> predLabelDict_vis.put(k, v < 0.5 ? 1 : 0));
+
+            //Add any mentions that we don't have labels for as predicted visual
+            //(the dominant class)
+            Set<Mention> unknownMentions = new HashSet<>();
+            for(Document d : _docDict.values())
+                for(Mention m : d.getMentionList())
+                    if(!predLabelDict_vis.containsKey(m.getUniqueID()))
+                        unknownMentions.add(m);
+            Logger.log("WARNING: Found " + unknownMentions.size() + " mentions without predicted nonvis labels; assigning as visual");
+            unknownMentions.forEach(m -> predLabelDict_vis.put(m.getUniqueID(), 1));
+
             _evaluateVisual(predLabelDict_vis, "pairwise");
         } else {
             //Since the relation scores require knowing which mentions are nonvis for
@@ -405,20 +416,6 @@ public class ILPInference
                     boolean nonvisMention = m_i.getChainID().equals("0") || m_j.getChainID().equals("0");
 
                     String gold = "null";
-
-                    /*
-                    if(nonvisMention){
-                        //gold = "-nonvis-";
-                    } else {
-                        if(m_i.getChainID().equals(m_j.getChainID())){
-                            gold = "coref";
-                        } else if(subsetMentions.contains(id_ij)) {
-                            gold = "subset_ij";
-                        } else if(subsetMentions.contains(id_ji)){
-                            gold = "subset_ji";
-                        }
-                    }*/
-
                     if(!nonvisMention){
                         if(m_i.getChainID().equals(m_j.getChainID())){
                             gold = "coref";
@@ -429,56 +426,21 @@ public class ILPInference
                         }
                     }
 
-                    /*
-                    //determine if either mention is nonvisual according to our
-                    //predicted nonvis scheme
-                    boolean predNonvisMention = nonvisMention;
-                    if(_usePredictedNonvis){
-                        predNonvisMention = _nonvisMentions.contains(m_i.getUniqueID()) ||
-                                _nonvisMentions.contains(m_j.getUniqueID());
-                    }
-
                     String pred = "-invalid-";
-                    if(predNonvisMention){
-                        pred = "-nonvis-";
-                    } else {
-                        if(predLabelDict.containsKey(id_ij) && predLabelDict.containsKey(id_ji)){
-                            int pred_ij = predLabelDict.get(id_ij);
-                            int pred_ji = predLabelDict.get(id_ji);
-
-                            if(pred_ij + pred_ji == 0){
-                                pred = "null";
-                            } else if(pred_ij + pred_ji == 5){
-                                if(pred_ij == 2)
-                                    pred = "subset_ij";
-                                else if(pred_ji == 2)
-                                    pred = "subset_ji";
-                            } else if(pred_ij == pred_ji && pred_ij == 1){
-                                pred = "coref";
-                            }
-                        } else if(m_i.getPronounType() != Mention.PRONOUN_TYPE.NONE &&
-                                  m_i.getPronounType() != Mention.PRONOUN_TYPE.SEMI ||
-                                  m_j.getPronounType() != Mention.PRONOUN_TYPE.NONE &&
-                                  m_j.getPronounType() != Mention.PRONOUN_TYPE.SEMI){
-                            //these pronoun links should be null
-                            pred = "null";
-                        }
-                    }*/
-
-                    String pred = "-invalid-";
-
                     if(predLabelDict.containsKey(id_ij) && predLabelDict.containsKey(id_ji)){
                         int pred_ij = predLabelDict.get(id_ij);
                         int pred_ji = predLabelDict.get(id_ji);
-                        if(pred_ij + pred_ji == 0){
+                        if(pred_ij == pred_ji && pred_ij == 0){
                             pred = "null";
-                        } else if(pred_ij + pred_ji == 5){
-                            if(pred_ij == 2)
-                                pred = "subset_ij";
-                            else if(pred_ji == 2)
-                                pred = "subset_ji";
                         } else if(pred_ij == pred_ji && pred_ij == 1){
                             pred = "coref";
+                        }
+                        else if(pred_ij == 2 && pred_ji == 3 ||
+                                  pred_ij == 3 && pred_ji == 2){
+                            if(pred_ij == 2)
+                                pred = "subset_ij";
+                            else
+                                pred = "subset_ji";
                         }
                     }
 
@@ -574,24 +536,6 @@ public class ILPInference
 
                         boolean nonvis_j = m_j.getChainID().equals("0");
 
-                        /*
-                        int gold = 0;
-                        if(nonvis_j){
-                            gold = -1;
-                        } else {
-                            if(m_i.getChainID().equals(m_j.getChainID()))
-                                gold = 1;
-                            else if(subsetMentions.contains(id_ij))
-                                gold = 2;
-                            else if(subsetMentions.contains(id_ji))
-                                gold = 3;
-                        }
-                        boolean predNonvis_j = nonvis_j;
-                        if(_usePredictedNonvis){
-                            predNonvis_j = _nonvisMentions.contains(m_i.getUniqueID()) ||
-                                    _nonvisMentions.contains(m_j.getUniqueID());
-                        }*/
-
                         int gold = 0;
                         if(!nonvis_j){
                             if(m_i.getChainID().equals(m_j.getChainID()))
@@ -606,38 +550,18 @@ public class ILPInference
                         if(predLabelDict.containsKey(id_ij) && predLabelDict.containsKey(id_ji)){
                             int pred_ij = predLabelDict.get(id_ij);
                             int pred_ji = predLabelDict.get(id_ji);
-                            if(pred_ij + pred_ji == 0){
+                            if(pred_ij == pred_ji && pred_ij == 0){
                                 pred = 0;
-                            } else if(pred_ij + pred_ji == 5){
-                                if(pred_ij == 2)
-                                    pred = 2;
-                                else if(pred_ji == 2)
-                                    pred = 3;
                             } else if(pred_ij == pred_ji && pred_ij == 1){
                                 pred = 1;
+                            } else if(pred_ij == 2 && pred_ji == 3 &&
+                                      pred_ij == 3 && pred_ji == 2){
+                                if(pred_ij == 2)
+                                    pred = 2;
+                                else
+                                    pred = 3;
                             }
                         }
-
-                        /*
-                        int pred = -2;
-                        if(predNonvis_j){
-                            pred = -1;
-                        } else {
-                            if(predLabelDict.containsKey(id_ij) && predLabelDict.containsKey(id_ji)){
-                                int pred_ij = predLabelDict.get(id_ij);
-                                int pred_ji = predLabelDict.get(id_ji);
-                                if(pred_ij + pred_ji == 0){
-                                    pred = 0;
-                                } else if(pred_ij + pred_ji == 5){
-                                    if(pred_ij == 2)
-                                        pred = 2;
-                                    else if(pred_ji == 2)
-                                        pred = 3;
-                                } else if(pred_ij == pred_ji && pred_ij == 1){
-                                    pred = 1;
-                                }
-                            }
-                        }*/
 
                         foundConflict |= gold != pred;
                     }
@@ -670,12 +594,14 @@ public class ILPInference
         for(Document d : _docDict.values()){
             for(Mention m : d.getMentionList()){
                 int gold = m.getChainID().equals("0") ? 0 : 1;
-                int pred = predLabelDict.get(m.getUniqueID());
+                int pred = 1;
+                if(predLabelDict.containsKey(m.getUniqueID()))
+                    pred = predLabelDict.get(m.getUniqueID());
                 scoreDict.increment(gold, pred);
             }
         }
-        System.out.printf("%-10s: %s (acc: %.2f%%)\n", predType,
-                scoreDict.getScore(1).toScoreString(), scoreDict.getAccuracy());
+        System.out.println(predType);
+        scoreDict.printCompleteScores();
     }
 
     /**Evaluates the predicted box cardinalities in the predLabelDict
@@ -693,9 +619,6 @@ public class ILPInference
                 //this is a nonvis mention (according to our scheme)
                 Set<BoundingBox> assocBoxes = d.getBoxSetForMention(m);
                 boolean nonvisMention = m.getChainID().equals("0");
-                /*
-                if(_usePredictedNonvis)
-                    nonvisMention = _nonvisMentions.contains(m.getUniqueID());*/
 
                 //Treat all >10 boxes equally
                 int gold = Math.min(assocBoxes.size(), 11);
@@ -719,48 +642,49 @@ public class ILPInference
      */
     public void evaluate(boolean exportFiles)
     {
-        if(_infType == InferenceType.RELATION || _infType.toString().contains("JOINT")){
+        if(InferenceType.isVisualType(_infType)){
+            Logger.log("Evaluating visual graphs");
+            Map<String, Integer> predLabels_vis = new HashMap<>();
+            for(Map<String, Integer> labelDict : _visualGraphs.values())
+                labelDict.forEach((k,v) -> predLabels_vis.put(k, v));
+            _evaluateVisual(predLabels_vis, "inf");
+        }
+        if(InferenceType.isRelationType(_infType)){
             Logger.log("Evaluating relation graphs");
             Map<String, Integer> predLabels = new HashMap<>();
             for(Map<String, Integer> labelDict : _relationGraphs.values())
                 labelDict.forEach((k,v) -> predLabels.put(k, v));
             _evaluateRelations(predLabels, "out/post_inf_rel");
         }
-        if(_infType == GROUNDING || _infType.toString().contains("JOINT")){
+        if(InferenceType.isGroundingType(_infType)){
             Logger.log("Evaluating grounding graphs");
             Map<String, Integer> predLabels = new HashMap<>();
             for(Map<String, Integer> labelDict : _groundingGraphs.values())
                 labelDict.forEach((k,v) -> predLabels.put(k, v));
             _evaluateGroundings(predLabels, "out/post_inf_ground");
         }
-        Logger.log("Evaluating nonvis graphs for visual predictions");
-        Map<String, Integer> predLabels_vis = new HashMap<>();
-        for(Map<String, Integer> labelDict : _visualGraphs.values())
-            labelDict.forEach((k,v) -> predLabels_vis.put(k, v));
-        _evaluateVisual(predLabels_vis, "inf");
 
+        //Export files, if specified
         if(exportFiles){
-            //Export Relation files
-            if(_infType == InferenceType.RELATION || _infType.toString().contains("JOINT")){
+            if(InferenceType.isRelationType(_infType)){
                 Logger.log("Exporting conll and latex files");
-                Map<String, Set<Chain>> docChainSetDict = getPredictedChains();
+                Map<String, Set<Chain>> docPredChains = getPredictedChains();
                 for(Document d : _docDict.values()){
                     String corefCase = _infType == InferenceType.RELATION ? "inf" : "joint";
-                    _exportConllFile(d, docChainSetDict.get(d.getID()), corefCase);
-                    _exportRelationFile(d, docChainSetDict.get(d.getID()));
+                    _exportConllFile(d, docPredChains.get(d.getID()), corefCase);
+                    _exportRelationFile(d, docPredChains.get(d.getID()));
                 }
 
                 Logger.log("Exporting htm files");
                 Map<String, Set<Chain[]>> predSubsetChains = getPredictedSubsetChains();
                 for(Document d : _docDict.values()){
-                    FileIO.writeFile(HtmlIO.getImgHtm(d, docChainSetDict.get(d.getID()),
+                    FileIO.writeFile(HtmlIO.getImgHtm(d, docPredChains.get(d.getID()),
                             predSubsetChains.get(d.getID())),
                             "out/" + _infType.toString().toLowerCase() + "/htm/" +
                             d.getID().replace(".jpg", ""), "htm", false);
                 }
             }
-
-            if (_infType == GROUNDING || _infType.toString().contains("JOINT")) {
+            if(InferenceType.isGroundingType(_infType)){
                 Logger.log("Exporting grounding files");
                 Map<String, Integer> predLabels = new HashMap<>();
                 for(Map<String, Integer> labelDict : _groundingGraphs.values())
@@ -841,9 +765,6 @@ public class ILPInference
                 if(!nonvisMention)
                     mentionChainDict_gold.put(m.getUniqueID(), m.getChainID());
 
-                /*
-                if (_usePredictedNonvis)
-                    nonvisMention = _nonvisMentions.contains(m.getUniqueID());*/
                 if(!nonvisMention)
                     mentionChainDict_pred.put(m.getUniqueID(), predMentionChainDict.get(m.getUniqueID()));
             }
@@ -851,15 +772,7 @@ public class ILPInference
             ll_pred.add(c.toLatexString(mentionChainDict_pred, chainColors_pred, true, true) + "\\\\");
         }
 
-        String outDir = "out/";
-        switch(_infType){
-            case RELATION: outDir += "relation/relation/";
-                break;
-            case JOINT:
-            case JOINT_AFTER_GRND:
-                outDir += "joint/relation/";
-                break;
-        }
+        String outDir = "out/relation/";
         List<String> ll = new ArrayList<>();
         ll.add("\\emph{Gold}\\\\");
         ll.addAll(ll_gold);
@@ -917,16 +830,7 @@ public class ILPInference
             ll_pred.add(c.toLatexString(mentionBoxDict_pred) + "\\\\");
         }
 
-        String outDir = "out/";
-        switch(_infType){
-            case GROUNDING: outDir += "grounding/";
-                break;
-            case JOINT:
-            case JOINT_AFTER_REL:
-                outDir += "joint/grounding/";
-                break;
-        }
-
+        String outDir = "out/grounding/";
         List<String> ll = new ArrayList<>();
         ll.add("\\emph{Gold}\\\\");
         ll.addAll(ll_gold);
@@ -1084,24 +988,16 @@ public class ILPInference
            Map<String, Integer> fixedLinks, int numSolverThreads)
     {
         //Set up the basic thread
-        ILPSolverThread thread = null;
-        switch(_infType){
-            case RELATION: //thread = new ILPSolverThread(_visualMentionDict.get(docID), numSolverThreads);
-                          thread = new ILPSolverThread(_docDict.get(docID).getMentionList(), numSolverThreads);
-                break;
-            case GROUNDING:
-            case JOINT:
-            case JOINT_AFTER_GRND:
-            case JOINT_AFTER_REL:
-                //thread = new ILPSolverThread(_visualMentionDict.get(docID), _boxDict.get(docID),
-                //        _infType, numSolverThreads);
-                thread = new ILPSolverThread(_docDict.get(docID).getMentionList(), _boxDict.get(docID),
-                        _infType, numSolverThreads);
-                break;
+        ILPSolverThread thread;
+        if(_infType == RELATION || _infType == VISUAL_RELATION){
+            thread = new ILPSolverThread(_docDict.get(docID).getMentionList(), numSolverThreads);
+        } else {
+            thread = new ILPSolverThread(_docDict.get(docID).getMentionList(), _boxDict.get(docID),
+                    _infType, numSolverThreads);
         }
 
         //Add the fixed links, if there are any
-        if(thread != null && fixedLinks != null && !fixedLinks.isEmpty())
+        if(fixedLinks != null && !fixedLinks.isEmpty())
             thread.setFixedRelationLinks(fixedLinks);
 
         if(!_nonvisScores.isEmpty()) {
@@ -1113,14 +1009,14 @@ public class ILPInference
                     fixedVisualMentions.put(m.getUniqueID(), m.getChainID().equals("0") ? 0 : 1);
             thread.setFixedVisualMentions(fixedVisualMentions);
         }
-        if(_infType == RELATION || _infType.toString().contains("JOINT")){
+        if(InferenceType.isRelationType(_infType)){
             thread.setRelationScores(_relationScores);
             if(_excludeSubset)
                 thread.excludeSubset();
             if(_includeTypeConstr)
                 thread.includeTypeConstraint();
         }
-        if(_infType == GROUNDING || _infType.toString().contains("JOINT")){
+        if(InferenceType.isGroundingType(_infType)){
             thread.setAffinityScores(_affinityScores);
             thread.setCardinalityScores(_cardinalityScores);
             if(_excludeBoxExigence)
@@ -1157,16 +1053,16 @@ public class ILPInference
             docIds.removeAll(_relationGraphs.keySet());
             docIds.removeAll(_groundingGraphs.keySet());
             _infer(docIds, fixedCorefLinks, 1, numThreads);
-        } else if(_infType == InferenceType.RELATION || _infType == GROUNDING){
-            //If this is simple relation or grounding, we can run one document
+        } else if(!InferenceType.isFullJointType(_infType)){
+            //If this is not three-way joint inference, we can run one document
             //per thread, giving gurobi one thread, and itll be done relatively
             //quickly
             List<String> docIds = new ArrayList<>(documentIDs);
             docIds.removeAll(_relationGraphs.keySet());
             docIds.removeAll(_groundingGraphs.keySet());
             _infer(docIds, fixedCorefLinks, numThreads, 1);
-        } else if(_infType.toString().contains("JOINT")){
-            //If this is combined inference, however, we assume that we have a
+        } else {
+            //If this is three-way inference, however, we assume that we have a
             //number of threads that's divisible by four (I've been running these on
             //24 threads) and we're going to split the images into batches, based
             //on the size of the graph |M|^2 + |M||B|;
@@ -1235,7 +1131,7 @@ public class ILPInference
 
         //Finally, if this has been relation or combined inference,
         //convert our graphs to predicted chains
-        if(_infType == InferenceType.RELATION || _infType.toString().contains("JOINT")){
+        if(InferenceType.isRelationType(_infType)){
             Map<String, Integer> predLabels_rel = new HashMap<>();
             Map<String, Integer> predLabels_vis = new HashMap<>();
             for(Map<String, Integer> labelDict : _relationGraphs.values())
@@ -1360,6 +1256,37 @@ public class ILPInference
      *
      */
     public enum InferenceType {
-        RELATION, GROUNDING, JOINT, JOINT_AFTER_REL, JOINT_AFTER_GRND
+        RELATION, GROUNDING, VISUAL_RELATION, VISUAL_GROUNDING,
+        JOINT, JOINT_AFTER_VISUAL, JOINT_AFTER_RELATION,
+        JOINT_AFTER_GROUNDING;
+
+        private static Set<InferenceType> _visualTypes, _relationTypes, _groundingTypes;
+        private static Set<InferenceType> _fullJointTypes;
+        static {
+            InferenceType[] visualTypeArr = {VISUAL_RELATION, VISUAL_GROUNDING, JOINT,
+                                             JOINT_AFTER_VISUAL, JOINT_AFTER_RELATION,
+                                             JOINT_AFTER_GROUNDING};
+            _visualTypes = new HashSet<>(Arrays.asList(visualTypeArr));
+
+            InferenceType[] relationTypeArr = {RELATION, VISUAL_RELATION, JOINT,
+                                               JOINT_AFTER_VISUAL, JOINT_AFTER_RELATION,
+                                               JOINT_AFTER_GROUNDING};
+            _relationTypes = new HashSet<>(Arrays.asList(relationTypeArr));
+
+            InferenceType[] groundingTypeArr = {GROUNDING, VISUAL_GROUNDING, JOINT,
+                                                JOINT_AFTER_VISUAL, JOINT_AFTER_RELATION,
+                                                JOINT_AFTER_GROUNDING};
+            _groundingTypes = new HashSet<>(Arrays.asList(groundingTypeArr));
+
+            InferenceType[] fullJointTypeArr = {JOINT, JOINT_AFTER_VISUAL, JOINT_AFTER_RELATION,
+                                                JOINT_AFTER_GROUNDING};
+            _fullJointTypes = new HashSet<>(Arrays.asList(fullJointTypeArr));
+
+        }
+
+        public static boolean isVisualType(InferenceType t){return _visualTypes.contains(t);}
+        public static boolean isRelationType(InferenceType t){return _relationTypes.contains(t);}
+        public static boolean isGroundingType(InferenceType t){return _groundingTypes.contains(t);}
+        public static boolean isFullJointType(InferenceType t){return _fullJointTypes.contains(t);}
     }
 }

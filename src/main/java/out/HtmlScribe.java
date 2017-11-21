@@ -1,7 +1,5 @@
 package out;
 
-import statistical.BCubed;
-import statistical.Blanc;
 import statistical.Score;
 import structures.Caption;
 import structures.Chain;
@@ -134,7 +132,6 @@ public class HtmlScribe
         //the next row will contain our score table. The exact information
         //included in which will differ based on the score type
         pageBuilder.append("<tr><td>");
-        pageBuilder.append(getScoreTable(score));
         pageBuilder.append("</td></tr>");
 
         //The next row shows our debug output, split into
@@ -172,45 +169,6 @@ public class HtmlScribe
         pageBuilder.append("</table></body></html>");
         return pageBuilder.toString();
     }
-
-    private static StringBuilder getScoreTable(Score score)
-    {
-        StringBuilder tableBuilder = new StringBuilder();
-        tableBuilder.append("<table><tr>");
-        if(score.getType() == Score.ScoreType.BCUBED){
-            BCubed bcubScore = (BCubed)score;
-            tableBuilder.append("<td>");
-            tableBuilder.append(String.format("B<sup>3</sup> Accuracy<br/>"+
-                "<div style=\"padding-left:2em\">%s</div>",
-                bcubScore.toScoreString()));
-            tableBuilder.append("</td>");
-        } else if(score.getType() == Score.ScoreType.BLANC){
-            Blanc blancScore = (Blanc)score;
-
-            /*
-            //this column displays the overal classifier stats
-            tableBuilder.append("<td width=50% valign=\"top\">");
-            tableBuilder.append(String.format("Total links: %d<br/>"+
-                            "<div style=\"padding-left:2em\">%d positive</div>"+
-                            "<div style=\"padding-left:2em\">%d negative</div>",
-                    blancScore.getNumLinks(), blancScore.getNumPosLinks(),
-                    blancScore.getNumNegLinks()));*/
-            tableBuilder.append(String.format("BLANC Accuracy<br/>"+
-                            "<div style=\"padding-left:2em\">Pos: %s</div>"+
-                            "<div style=\"padding-left:2em\">Neg: %s</div>"+
-                            "<div style=\"padding-left:2em\">Ttl: %s</div>",
-                    blancScore.getScoreString_pos(), blancScore.getScoreString_neg(),
-                    blancScore.getScoreString_total()));
-            tableBuilder.append("<br/><br/><br/>");
-            tableBuilder.append("<em>Added Links: negative in gold, positive in predicted</em><br/>");
-            tableBuilder.append("<em>Removed Links: positive in gold, negative in predicted</em><br/>");
-            tableBuilder.append("<em>Totals based on merged gold</em>");
-            tableBuilder.append("</td>");
-        }
-        tableBuilder.append("</tr></table>");
-        return tableBuilder;
-    }
-
 
     private static StringBuilder
         getLinkMismatchTableRows(Set<String[]> mentionPairSet)
