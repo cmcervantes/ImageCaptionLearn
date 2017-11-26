@@ -49,7 +49,7 @@ public abstract class ClassifyUtil {
     private static Map<String, Integer> _quantifiers_kv;
 
     //onehot lists
-    private static Map<String, Integer> _typePairs;
+    //private static Map<String, Integer> _typePairs;
     private static Map<String, Integer> _leftPairs;
     private static Map<String, Integer> _rightPairs;
     private static Map<String, Integer> _headPairs;
@@ -60,7 +60,7 @@ public abstract class ClassifyUtil {
     private static Map<String, Integer> _numericPairs;
     private static Map<String, Integer> _prepositionPairs;
     private static Map<String, Integer> _categories;
-    private static Map<String, Integer> _categoryPairs;
+    //private static Map<String, Integer> _categoryPairs;
     private static Map<String, Integer> _heads;
     private static Map<String, Integer> _modifiers;
     private static Map<String, Integer> _numerics;
@@ -113,7 +113,7 @@ public abstract class ClassifyUtil {
         Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
 
         Logger.log("Feature preprocessing (onehot index dictionaries)");
-        _typePairs = loadOnehotDict(Overlord.flickr30kResources + "hist_typePair_ordered.csv", 1000);
+        //_typePairs = loadOnehotDict(Overlord.flickr30kResources + "hist_typePair_ordered.csv", 1000);
         _leftPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_leftPair_ordered.csv", 1000);
         _rightPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_rightPair_ordered.csv", 1000);
         _headPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_headPair_ordered.csv", 1);
@@ -127,7 +127,7 @@ public abstract class ClassifyUtil {
         _modifiers = loadOnehotDict(Overlord.flickr30kResources + "hist_modifier.csv", 1);
         _numerics = loadOnehotDict(Overlord.flickr30kResources + "hist_numericModifier.csv", 1);
         _prepositions = loadOnehotDict(Overlord.flickr30kResources + "hist_preposition.csv", 1);
-        _types = loadOnehotDict(Overlord.flickr30kResources + "hist_type.csv", 1000);
+        //_types = loadOnehotDict(Overlord.flickr30kResources + "hist_type.csv", 1000);
         _lefts = loadOnehotDict(Overlord.flickr30kResources + "hist_left.csv", 1000);
         _rights = loadOnehotDict(Overlord.flickr30kResources + "hist_right.csv", 1000);
         _subjOfs = loadOnehotDict(Overlord.flickr30kResources + "hist_subjOf.csv", 1);
@@ -135,8 +135,19 @@ public abstract class ClassifyUtil {
         _pronouns = loadOnehotDict(Overlord.flickr30kResources + "hist_pronoun.csv", 1);
         _pronounTypes = loadOnehotDict(Overlord.flickr30kResources + "hist_pronounType.csv", 0);
         _nonvisuals = loadOnehotDict(Overlord.flickr30kResources + "hist_nonvisual.csv", 1);
-        _categories = loadOnehotDict(Overlord.mscocoResources + "hist_cocoCategory.csv", 1000);
-        _categoryPairs = loadOnehotDict(Overlord.mscocoResources + "hist_cocoCategoryPair.csv", 1000);
+        //_categories = loadOnehotDict(Overlord.mscocoResources + "hist_cocoCategory.csv", 1000);
+        //_categoryPairs = loadOnehotDict(Overlord.mscocoResources + "hist_cocoCategoryPair.csv", 1000);
+        _categories = new HashMap<>();
+        List<String> catList = new ArrayList<>(Mention.getCOCOCategories());
+        Collections.sort(catList);
+        for(int i=0; i<catList.size(); i++)
+            _categories.put(catList.get(i), i);
+        List<String> typeList = Arrays.asList("people", "other", "scene", "animals",
+                                              "clothing", "bodyparts", "instruments",
+                                              "vehicles", "colors");
+        _types = new HashMap<>();
+        for(int i=0; i<typeList.size(); i++)
+            _types.put(typeList.get(i), i);
 
         _hypernyms = new ArrayList<>();
         for(String[] row : FileIO.readFile_table(Overlord.flickr30kResources + "hist_hypernym.csv"))
@@ -319,6 +330,8 @@ public abstract class ClassifyUtil {
             _distances.put(String.valueOf(i), i);
         _distances.put(">10", 11);
     }
+
+
 
     /**Exports relation features to outroot.feats, using the given collection of
      * Documents, number of threads, and whether to include the subset and
@@ -595,8 +608,19 @@ public abstract class ClassifyUtil {
                     currentIdx = _addOneHotVector(mods[1], fv, currentIdx, _modifiers, "modifier_onehot", metaDict);
                     currentIdx = _addOneHotVector(lemma, fv, currentIdx, _nonvisuals, "nonvisual_lemma_onehot", metaDict);
                 }
-                currentIdx = _addOneHotVector(lexType, fv, currentIdx, _types, "lexical_type_onehot", metaDict);
-                currentIdx = _addOneHotVector(cocoCat, fv, currentIdx, _categories, "coco_category_onehot", metaDict);
+                int f_isNonvisLemma = _nonvisuals.containsKey(lemma) ? TRUE : FALSE;
+                fv.addFeature(currentIdx, f_isNonvisLemma);
+                _addMetaEntry("isNonvisLemma", currentIdx, metaDict);
+                currentIdx++;
+
+                //currentIdx = _addOneHotVector(lexType, fv, currentIdx, _types, "lexical_type_onehot", metaDict);
+                //currentIdx = _addOneHotVector(cocoCat, fv, currentIdx, _categories, "coco_category_onehot", metaDict);
+                String[] typeArr = lexType == null ? new String[]{} : lexType.split("/");
+                currentIdx = _addNHotVector(typeArr, fv, currentIdx,
+                        _types, "lex_type_nhot", metaDict);
+                String[] catArr = cocoCat == null ? new String[]{} : cocoCat.split("/");
+                currentIdx = _addNHotVector(catArr, fv, currentIdx,
+                        _categories, "category_nhot", metaDict);
 
                 //governing verbs
                 Chunk subjOf = _subjOfDict.get(m); String subjOfStr = "";
@@ -1499,6 +1523,24 @@ public abstract class ClassifyUtil {
         return end+1;
     }
 
+    private static int _addNHotVector(String[] items, FeatureVector fv,
+                                      int idxOffset, Map<String, Integer> idxDict,
+                                      String featName, Map<String, Object> metaDict)
+    {
+        //Add this item to the vector (if it's present) as many times
+        //as it matches
+        int end = idxOffset + idxDict.size() + 1;
+        for(String item : items)
+            if(idxDict.containsKey(item))
+                fv.addFeature(idxOffset + idxDict.get(item) + 1, 1.0);
+
+        //Add this onehot to the meta dict
+        _addMetaEntry(featName, idxOffset, end, metaDict);
+
+        return end+1;
+    }
+
+
     /**Adds a (featName,idx) pair to the given metaDict
      *
      * @param featName
@@ -2262,14 +2304,26 @@ public abstract class ClassifyUtil {
                 currentIdx = _addOneHotVector(distance_ij, fv, currentIdx,
                         _distances, "distance_ij", _metaDict);
             }
-            currentIdx = _addOneHotVector(typePair, fv, currentIdx,
-                    _typePairs, "lex_type_pair_onehot", _metaDict);
             currentIdx = _addOneHotVector(leftPair, fv, currentIdx,
                     _leftPairs, "left_pair_onehot", _metaDict);
             currentIdx = _addOneHotVector(rightPair, fv, currentIdx,
                     _rightPairs, "right_pair_onehot", _metaDict);
-            currentIdx = _addOneHotVector(cocoCat_1 + "|" + cocoCat_2, fv, currentIdx,
-                    _categoryPairs, "categoryPair_onehot", _metaDict);
+            String[] typeArr1 = type_1 == null ? new String[]{} : type_1.split("/");
+            currentIdx = _addNHotVector(typeArr1, fv, currentIdx,
+                    _types, "lex_type_1_nhot", _metaDict);
+            String[] typeArr2 = type_2 == null ? new String[]{} : type_2.split("/");
+            currentIdx = _addNHotVector(typeArr2, fv, currentIdx,
+                    _types, "lex_type_2_nhot", _metaDict);
+            String[] catArr1 = cocoCat_1 == null ? new String[]{} : cocoCat_1.split("/");
+            currentIdx = _addNHotVector(catArr1, fv, currentIdx,
+                    _categories, "category_1_nhot", _metaDict);
+            String[] catArr2 = cocoCat_2 == null ? new String[]{} : cocoCat_2.split("/");
+            currentIdx = _addNHotVector(catArr2, fv, currentIdx,
+                    _categories, "category_2_nhot", _metaDict);
+            //currentIdx = _addOneHotVector(typePair, fv, currentIdx,
+            //        _typePairs, "lex_type_pair_onehot", _metaDict);
+            //currentIdx = _addOneHotVector(cocoCat_1 + "|" + cocoCat_2, fv, currentIdx,
+            //        _categoryPairs, "categoryPair_onehot", _metaDict);
             String pronomType_i = m1.getPronounType().toString();
             currentIdx = _addOneHotVector(pronomType_i, fv, currentIdx,
                     _pronounTypes, "pronoun_type_i_onehot", _metaDict);

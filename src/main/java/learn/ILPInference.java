@@ -175,13 +175,6 @@ public class ILPInference
             unknownMentions.forEach(m -> predLabelDict_vis.put(m.getUniqueID(), 1));
 
             _evaluateVisual(predLabelDict_vis, "pairwise");
-        } else {
-            //Since the relation scores require knowing which mentions are nonvis for
-            //conll files, store the gold nonvisual data if we weren't given
-            //nonvis scores
-            for(Document d : _docDict.values())
-                for(Mention m : d.getMentionList())
-                    predLabelDict_vis.put(m.getUniqueID(), m.getChainID().equals("0") ? 0 : 1);
         }
 
         if(!_relationScores.isEmpty()){
@@ -293,7 +286,6 @@ public class ILPInference
             List<Object> row = new ArrayList<>();
             List<Double> accuracies = accuracies_byEntities.get(entityCount);
             ScoreDict<String> scores = macroAverage_byEntities.get(entityCount);
-
 
             row.add(entityCount);
             row.add(accuracies.size());
@@ -855,12 +847,14 @@ public class ILPInference
                 Mention m_i = mentions.get(i);
 
                 //Skip all predicted nonvisual mentions
-                if(predLabelDict_vis.get(m_i.getUniqueID()) != 1)
+                if(predLabelDict_vis.containsKey(m_i.getUniqueID()) &&
+                   predLabelDict_vis.get(m_i.getUniqueID()) != 1)
                     continue;
 
                 for(int j=i+1; j<mentions.size(); j++){
                     Mention m_j = mentions.get(j);
-                    if(predLabelDict_vis.get(m_j.getUniqueID()) != 1)
+                    if(predLabelDict_vis.containsKey(m_j.getUniqueID()) &&
+                       predLabelDict_vis.get(m_j.getUniqueID()) != 1)
                         continue;
 
                     String id_ij = Document.getMentionPairStr(m_i, m_j);
@@ -896,7 +890,8 @@ public class ILPInference
             //Add all unassigned visual mentions as singleton chains
             mentions.removeAll(mentionChainIdDict.keySet());
             for(Mention m : mentions) {
-                if(predLabelDict_vis.get(m.getUniqueID()) == 1)
+                if(!predLabelDict_vis.containsKey(m.getUniqueID()) ||
+                    predLabelDict_vis.get(m.getUniqueID()) == 1)
                     mentionChainIdDict.put(m, String.valueOf(chainIdx++));
             }
 
@@ -914,7 +909,8 @@ public class ILPInference
             //we want to add all predicted nonvisual mentions as chain 0
             Chain nonvisChain = new Chain(d.getID(), "0");
             for(Mention m : d.getMentionList())
-                if(predLabelDict_vis.get(m.getUniqueID()) == 0)
+                if(predLabelDict_vis.containsKey(m.getUniqueID()) &&
+                   predLabelDict_vis.get(m.getUniqueID()) == 0)
                     nonvisChain.addMention(m);
             chainSet.add(nonvisChain);
 
@@ -1003,11 +999,12 @@ public class ILPInference
         if(!_nonvisScores.isEmpty()) {
             thread.setNonvisScores(_nonvisScores);
         } else{
+            /*
             Map<String, Integer> fixedVisualMentions = new HashMap<>();
             for(Document d : _docDict.values())
                 for(Mention m : d.getMentionList())
                     fixedVisualMentions.put(m.getUniqueID(), m.getChainID().equals("0") ? 0 : 1);
-            thread.setFixedVisualMentions(fixedVisualMentions);
+            thread.setFixedVisualMentions(fixedVisualMentions);*/
         }
         if(InferenceType.isRelationType(_infType)){
             thread.setRelationScores(_relationScores);
@@ -1136,8 +1133,9 @@ public class ILPInference
             Map<String, Integer> predLabels_vis = new HashMap<>();
             for(Map<String, Integer> labelDict : _relationGraphs.values())
                 labelDict.forEach((k,v) -> predLabels_rel.put(k, v));
-            for(Map<String, Integer> labelDict : _visualGraphs.values())
-                labelDict.forEach((k,v) -> predLabels_vis.put(k, v));
+            if(InferenceType.isVisualType(_infType))
+                for(Map<String, Integer> labelDict : _visualGraphs.values())
+                    labelDict.forEach((k,v) -> predLabels_vis.put(k, v));
 
             _predChains = _buildChainsFromPredLabels(predLabels_rel, predLabels_vis);
         }
@@ -1258,7 +1256,7 @@ public class ILPInference
     public enum InferenceType {
         RELATION, GROUNDING, VISUAL_RELATION, VISUAL_GROUNDING,
         JOINT, JOINT_AFTER_VISUAL, JOINT_AFTER_RELATION,
-        JOINT_AFTER_GROUNDING;
+        JOINT_AFTER_GROUNDING, NONVIS_JOINT;
 
         private static Set<InferenceType> _visualTypes, _relationTypes, _groundingTypes;
         private static Set<InferenceType> _fullJointTypes;
@@ -1270,16 +1268,16 @@ public class ILPInference
 
             InferenceType[] relationTypeArr = {RELATION, VISUAL_RELATION, JOINT,
                                                JOINT_AFTER_VISUAL, JOINT_AFTER_RELATION,
-                                               JOINT_AFTER_GROUNDING};
+                                               JOINT_AFTER_GROUNDING, NONVIS_JOINT};
             _relationTypes = new HashSet<>(Arrays.asList(relationTypeArr));
 
             InferenceType[] groundingTypeArr = {GROUNDING, VISUAL_GROUNDING, JOINT,
                                                 JOINT_AFTER_VISUAL, JOINT_AFTER_RELATION,
-                                                JOINT_AFTER_GROUNDING};
+                                                JOINT_AFTER_GROUNDING, NONVIS_JOINT};
             _groundingTypes = new HashSet<>(Arrays.asList(groundingTypeArr));
 
             InferenceType[] fullJointTypeArr = {JOINT, JOINT_AFTER_VISUAL, JOINT_AFTER_RELATION,
-                                                JOINT_AFTER_GROUNDING};
+                                                JOINT_AFTER_GROUNDING, NONVIS_JOINT};
             _fullJointTypes = new HashSet<>(Arrays.asList(fullJointTypeArr));
 
         }

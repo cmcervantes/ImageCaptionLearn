@@ -162,7 +162,7 @@ public class Overlord
         parser.setArgument_opts("--inf_type", new String[]{"relation", "grounding",
                         "visual_relation", "visual_grounding", "joint",
                         "joint_after_visual", "joint_after_relation",
-                        "joint_after_grounding"}, "relation",
+                        "joint_after_grounding", "nonvis_joint"}, "relation",
                         "Specifies which inference module to use", "Infer");
         parser.setArgument_flag("--include_type_constraint", "Enables the inference type constraint", "Infer");
         parser.setArgument_flag("--exclude_subset", "Whether to exclude the subset label "+
@@ -242,6 +242,48 @@ public class Overlord
             } else if(parser.getBoolean("mod_subset")){
                 Minion.export_modSubsetFeats(docSet, split);
             } else {
+
+
+                Mention.initializeLexicons(flickr30k_lexicon, mscoco_lexicon);
+
+
+
+                ScoreDict<Integer> affinityScores = new ScoreDict<>();
+                double perfectImages = 0;
+                double perfectMentions = 0;
+                double ttlm = 0;
+                double catLessMentions = 0;
+                for(Document d : docSet){
+                    boolean foundMismatch_img = false;
+                    for(Mention m : d.getMentionList()){
+                        Set<BoundingBox> assocBoxes = d.getBoxSetForMention(m);
+                        Set<String> mentionCats = new HashSet<>();
+                        String mentionCatsStr = Mention.getLexicalEntry_cocoCategory(m, false);
+                        if(mentionCatsStr != null)
+                            mentionCats.addAll(Arrays.asList(mentionCatsStr.split("/")));
+                        else
+                            catLessMentions++;
+                        boolean foundMismatch_m = false;
+                        for(BoundingBox b : d.getBoundingBoxSet()){
+                            int gold = !assocBoxes.isEmpty() && assocBoxes.contains(b) ? 1 : 0;
+                            int pred = !mentionCats.isEmpty() && mentionCats.contains(b.getCategory()) ? 1 : 0;
+                            affinityScores.increment(gold, pred);
+                            foundMismatch_img |= gold != pred;
+                            foundMismatch_m |= gold != pred;
+                        }
+                        ttlm++;
+                        if(!foundMismatch_m)
+                            perfectMentions++;
+                    }
+                    if(!foundMismatch_img)
+                        perfectImages++;
+                }
+                affinityScores.printCompleteScores();
+                System.out.println(perfectImages / docSet.size());
+                System.out.println(perfectMentions / ttlm);
+                System.out.println(catLessMentions / ttlm);
+
+                System.exit(0);
 
                 Mention.initializeLexicons(flickr30k_lexicon, mscoco_lexicon);
                 List<String> cocoCats = new ArrayList<>(Mention.getCOCOCategories());

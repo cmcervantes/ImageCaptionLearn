@@ -253,22 +253,24 @@ public class ILPSolverThread extends Thread
                 break;
             case VISUAL_GROUNDING: run_grounding(true);
                 break;
-            case JOINT: run_joint();
+            case JOINT: run_joint(true);
                 break;
             case JOINT_AFTER_VISUAL:
                 _mentionList.forEach(m -> _fixedVisualMentions.put(m.getUniqueID(),
                         _nonvisScores.get(m.getUniqueID()) > 0.5 ? 0 : 1));
-                run_joint();
+                run_joint(true);
                 break;
             case JOINT_AFTER_RELATION: run_relation(false);
                 _fixedRelationLinks = new HashMap<>(_relationGraph);
                 _relationGraph = new HashMap<>();
-                run_joint();
+                run_joint(true);
                 break;
             case JOINT_AFTER_GROUNDING: run_grounding(false);
                 _fixedGroundingLinks = new HashMap<>(_groundingGraph);
                 _groundingGraph = new HashMap<>();
-                run_joint();
+                run_joint(true);
+                break;
+            case NONVIS_JOINT: run_joint(false);
                 break;
         }
 
@@ -278,10 +280,11 @@ public class ILPSolverThread extends Thread
             _fallbackSolution = true;
             _relationGraph = new HashMap<>(); _groundingGraph = new HashMap<>();
             _resetSolver();
-            run_grounding(true);
+            boolean includeVis = _infType != ILPInference.InferenceType.NONVIS_JOINT;
+            run_grounding(includeVis);
             boolean solvedGrounding = _foundSolution;
             _resetSolver();
-            run_relation(true);
+            run_relation(includeVis);
             _foundSolution &= solvedGrounding;
         }
     }
@@ -394,7 +397,7 @@ public class ILPSolverThread extends Thread
     /**
      * Sets up and runs the ILP solver for combined inference
      */
-    private void run_joint() {
+    private void run_joint(boolean includeVisual) {
         int[] visualIndices = new int[_mentionList.size()];
         int[] nonvisualIndices = new int[_mentionList.size()];
         int[][][] relationIndices =
@@ -406,8 +409,10 @@ public class ILPSolverThread extends Thread
             Mention m_i = _mentionList.get(i);
 
             //Visual variables
-            visualIndices[i] = _addVisualVariable_vis(m_i.getUniqueID());
-            nonvisualIndices[i] = _addVisualVariable_nonvis(m_i.getUniqueID(), visualIndices[i]);
+            if(includeVisual){
+                visualIndices[i] = _addVisualVariable_vis(m_i.getUniqueID());
+                nonvisualIndices[i] = _addVisualVariable_nonvis(m_i.getUniqueID(), visualIndices[i]);
+            }
 
             //Relation variables
             for (int j = i + 1; j < _mentionList.size(); j++) {
@@ -443,11 +448,13 @@ public class ILPSolverThread extends Thread
         _addJointConstraints(relationIndices, groundingIndices, cardinalityIndices);
 
         //Add visual constraints
-        _addVisualConstraints_relation(visualIndices, relationIndices);
-        _addVisualConstraints_grounding(nonvisualIndices, cardinalityIndices);
+        if(includeVisual){
+            _addVisualConstraints_relation(visualIndices, relationIndices);
+            _addVisualConstraints_grounding(nonvisualIndices, cardinalityIndices);
+            _addVisualConstraints_fixed(visualIndices);
+        }
 
         //Add fixed links
-        _addVisualConstraints_fixed(visualIndices);
         _addRelationConstraints_fixed(relationIndices);
         _addGroundingConstraints_fixed(groundingIndices);
 

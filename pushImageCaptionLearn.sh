@@ -11,6 +11,7 @@ scp ~/source/ImageCaptionLearn/build.sh clgrad5:~/source/ImageCaptionLearn/stagi
 scp ~/source/ImageCaptionLearn/exportClassifierFiles.sh clgrad5:~/source/ImageCaptionLearn/staging_0/ >/dev/null
 scp ~/source/ImageCaptionLearn/README clgrad5:~/source/ImageCaptionLearn/staging_0/ >/dev/null
 scp ~/source/ImageCaptionLearn/resetOut.sh clgrad5:~/source/ImageCaptionLearn/staging_0/ >/dev/null
+scp ~/source/ImageCaptionLearn/extractFeats.sh clgrad5:~/source/ImageCaptionLearn/staging_0/ >/dev/null
 
 scp -r ~/source/ImageCaptionLearn/src/ clgrad5:~/source/ImageCaptionLearn/staging_1/ >/dev/null
 scp ~/source/ImageCaptionLearn/pom.xml clgrad5:~/source/ImageCaptionLearn/staging_1/ >/dev/null
@@ -18,6 +19,7 @@ scp ~/source/ImageCaptionLearn/build.sh clgrad5:~/source/ImageCaptionLearn/stagi
 scp ~/source/ImageCaptionLearn/exportClassifierFiles.sh clgrad5:~/source/ImageCaptionLearn/staging_1/ >/dev/null
 scp ~/source/ImageCaptionLearn/README clgrad5:~/source/ImageCaptionLearn/staging_1/ >/dev/null
 scp ~/source/ImageCaptionLearn/resetOut.sh clgrad5:~/source/ImageCaptionLearn/staging_1/ >/dev/null
+scp ~/source/ImageCaptionLearn/extractFeats.sh clgrad5:~/source/ImageCaptionLearn/staging_1/ >/dev/null
 
 scp -r ~/source/ImageCaptionLearn/src/ clgrad5:~/source/ImageCaptionLearn/staging_2/ >/dev/null
 scp ~/source/ImageCaptionLearn/pom.xml clgrad5:~/source/ImageCaptionLearn/staging_2/ >/dev/null
@@ -25,6 +27,7 @@ scp ~/source/ImageCaptionLearn/build.sh clgrad5:~/source/ImageCaptionLearn/stagi
 scp ~/source/ImageCaptionLearn/exportClassifierFiles.sh clgrad5:~/source/ImageCaptionLearn/staging_2/ >/dev/null
 scp ~/source/ImageCaptionLearn/README clgrad5:~/source/ImageCaptionLearn/staging_2/ >/dev/null
 scp ~/source/ImageCaptionLearn/resetOut.sh clgrad5:~/source/ImageCaptionLearn/staging_2/ >/dev/null
+scp ~/source/ImageCaptionLearn/extractFeats.sh clgrad5:~/source/ImageCaptionLearn/staging_2/ >/dev/null
 
 
 
