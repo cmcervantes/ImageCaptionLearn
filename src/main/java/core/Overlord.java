@@ -108,7 +108,7 @@ public class Overlord
         parser.setArgument_opts("--extractFeats", featOpts, null,
                 "Extracts features to --out", "Data");
         parser.setArgument_opts("--neuralPreproc",
-                new String[]{"caption", "nonvis", "relation", "card"},
+                new String[]{"caption", "nonvis", "relation", "card", "affinity"},
                 null, "Exports neural preprocessing files to --out", "Data");
         parser.setArgument_flag("--for_neural", "Whether extracted features are to be "+
                                 "used in conjunction with word embeddings in a neural "+
@@ -243,6 +243,103 @@ public class Overlord
                 Minion.export_modSubsetFeats(docSet, split);
             } else {
 
+                /*
+                Mention.initializeLexicons(flickr30k_lexicon, mscoco_lexicon);
+                List<String> cocoCats = new ArrayList<>(Mention.getCOCOCategories());
+                Collections.sort(cocoCats);
+
+                List<String> ll_boxCats = new ArrayList<>();
+                for(Document d : docSet){
+                    for(BoundingBox b : d.getBoundingBoxSet()){
+                        int idx = cocoCats.indexOf(b.getCategory());
+                        Double[] onehot = new Double[cocoCats.size()];
+                        Arrays.fill(onehot, 0.0);
+                        if(idx >= 0)
+                            onehot[idx] = 1.0;
+                        ll_boxCats.add(b.getUniqueID() + "\t" + StringUtil.listToString(onehot, ","));
+                    }
+                }
+                FileIO.writeFile(ll_boxCats, "/home/ccervan2/data/tacl201712/raw/" +
+                        dataset + "_" + split + "_box_cats", "txt", false);
+
+                System.exit(0);*/
+
+
+                System.out.println("------ Strict ----- ");
+                ClassifyUtil.evaluateAffinity_cocoHeuristic(docSet, true);
+
+                System.out.println("------- Relaxed ---- ");
+                ClassifyUtil.evaluateAffinity_cocoHeuristic(docSet, false);
+
+                System.exit(0);
+
+                System.out.println("------ Stats ------");
+                DoubleDict<String> mDict = new DoubleDict<>();
+                DoubleDict<String> pronomDict = new DoubleDict<>();
+                double ttlM = 0.0;
+                for(Document d : docSet){
+                    ttlM += d.getMentionList().size();
+                    for(Mention m : d.getMentionList()){
+                        Set<BoundingBox> assocBoxes = d.getBoxSetForMention(m);
+
+                        String mentionCatStr_strict =
+                                Mention.getLexicalEntry_cocoCategory(m, false);
+                        String mentionCatStr_relaxed =
+                                Mention.getLexicalEntry_cocoCategory(m, true);
+
+                        if(mentionCatStr_strict == null){
+                            mDict.increment("nocat_strict");
+
+                            if(m.getPronounType() != Mention.PRONOUN_TYPE.NONE)
+                                mDict.increment("nocat_strict_pronom");
+                            if(assocBoxes.isEmpty())
+                                mDict.increment("nocat_strict_nobox");
+                            else
+                                mDict.increment("nocat_strict_box");
+                        } else {
+                            if(m.getPronounType() != Mention.PRONOUN_TYPE.NONE) {
+                                mDict.increment("cat_strict_pronom");
+                                pronomDict.increment("strict_" + m.getPronounType().toString());
+                            }
+                            if(mentionCatStr_strict.contains("/"))
+                                mDict.increment("multicat_strict");
+                            if(assocBoxes.isEmpty())
+                                mDict.increment("cat_strict_nobox");
+                            else
+                                mDict.increment("cat_strict_box");
+                        }
+
+
+                        if(mentionCatStr_relaxed == null){
+                            mDict.increment("nocat_relaxed");
+
+                            if(m.getPronounType() != Mention.PRONOUN_TYPE.NONE)
+                                mDict.increment("nocat_relaxed_pronom");
+                            if(assocBoxes.isEmpty())
+                                mDict.increment("nocat_relaxed_nobox");
+                            else
+                                mDict.increment("nocat_relaxed_box");
+                        } else {
+                            if(m.getPronounType() != Mention.PRONOUN_TYPE.NONE) {
+                                mDict.increment("cat_relaxed_pronom");
+                                pronomDict.increment("relaxed_" + m.getPronounType().toString());
+                            }
+                            if(mentionCatStr_relaxed.contains("/"))
+                                mDict.increment("multicat_relaxed");
+                            if(assocBoxes.isEmpty())
+                                mDict.increment("cat_relaxed_nobox");
+                            else
+                                mDict.increment("cat_relaxed_box");
+                        }
+                    }
+                }
+                for(String key : mDict.keySet())
+                    mDict.divide(key, ttlM / 100.0);
+                System.out.println(mDict);
+                System.out.println(pronomDict);
+
+                System.exit(0);
+
 
                 Mention.initializeLexicons(flickr30k_lexicon, mscoco_lexicon);
 
@@ -285,25 +382,6 @@ public class Overlord
 
                 System.exit(0);
 
-                Mention.initializeLexicons(flickr30k_lexicon, mscoco_lexicon);
-                List<String> cocoCats = new ArrayList<>(Mention.getCOCOCategories());
-                Collections.sort(cocoCats);
-
-                List<String> ll_boxCats = new ArrayList<>();
-                for(Document d : docSet){
-                    for(BoundingBox b : d.getBoundingBoxSet()){
-                        int idx = cocoCats.indexOf(b.getCategory());
-                        Double[] onehot = new Double[cocoCats.size()];
-                        Arrays.fill(onehot, 0.0);
-                        if(idx >= 0)
-                            onehot[idx] = 1.0;
-                        ll_boxCats.add(b.getUniqueID() + "\t" + StringUtil.listToString(onehot, ","));
-                    }
-                }
-                FileIO.writeFile(ll_boxCats, "/home/ccervan2/data/tacl201712/raw/" +
-                                dataset + "_" + split + "_box_cats", "txt", false);
-
-                System.exit(0);
 
                 Mention.initializeLexicons(flickr30k_lexicon, mscoco_lexicon);
                 List<String> ll_mentionBoxLabels = new ArrayList<>();
@@ -2176,6 +2254,8 @@ public class Overlord
                     case "nonvis": Preprocess.export_neuralNonvisFile(docSet, _outroot);
                         break;
                     case "card": Preprocess.export_neuralCardinalityFile(docSet, _outroot);
+                        break;
+                    case "affinity": Preprocess.export_neuralAffinityFiles(docSet, _outroot);
                         break;
                 }
             } else if(ccaPreproc != null){

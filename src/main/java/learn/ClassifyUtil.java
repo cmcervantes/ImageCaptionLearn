@@ -600,7 +600,7 @@ public abstract class ClassifyUtil {
                 String head = m.getHead().toString().toLowerCase();
                 String[] mods = m.getModifiers();
                 String lexType = m.getLexicalType().toLowerCase();
-                String cocoCat = Mention.getLexicalEntry_cocoCategory(m, true);
+                String cocoCat = Mention.getLexicalEntry_cocoCategory(m);
                 String lemma = m.getHead().getLemma().toLowerCase();
                 if(!forNeural){
                     currentIdx = _addOneHotVector(head, fv, currentIdx, _heads, "head_onehot", metaDict);
@@ -915,6 +915,29 @@ public abstract class ClassifyUtil {
                 (int)perfectDict.get("imgs_model"), 100.0 * perfectDict.get("imgs_model") /
                         perfectDict.get("imgs"), (int)perfectDict.get("mentions_model"),
                 100.0 * perfectDict.get("mentions_model") / perfectDict.get("mentions"));
+    }
+
+    public static void evaluateAffinity_cocoHeuristic(Collection<Document> docSet)
+    {
+        Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
+        ScoreDict<Integer> scoreDict = new ScoreDict<>();
+        for(Document d : docSet){
+            for(Mention m : d.getMentionList()){
+                Set<BoundingBox> assocBoxes = d.getBoxSetForMention(m);
+                String mentionCatStr = Mention.getLexicalEntry_cocoCategory(m);
+                Set<String> mentionCats = new HashSet<>();
+                if(mentionCatStr != null)
+                    mentionCats = new HashSet<>(Arrays.asList(mentionCatStr.split("/")));
+
+                for(BoundingBox b : d.getBoundingBoxSet()){
+                    int gold = assocBoxes.contains(b) ? 1 : 0;
+                    int pred = !mentionCats.isEmpty() &&
+                            mentionCats.contains(b.getCategory()) ? 1 : 0;
+                    scoreDict.increment(gold, pred);
+                }
+            }
+        }
+        scoreDict.printCompleteScores();
     }
 
     public static void exportStanfordCorefConll(Collection<Document> docSet)
@@ -1859,8 +1882,8 @@ public abstract class ClassifyUtil {
             featureList.add(f_lexTypeMatch_only);
             _addMetaEntry("lex_type_match_only", currentIdx++, _metaDict);
 
-            String cocoCat_1 = Mention.getLexicalEntry_cocoCategory(m1, true);
-            String cocoCat_2 = Mention.getLexicalEntry_cocoCategory(m2, true);
+            String cocoCat_1 = Mention.getLexicalEntry_cocoCategory(m1);
+            String cocoCat_2 = Mention.getLexicalEntry_cocoCategory(m2);
             Double f_cocoCatMatch = 0.0;
             if(cocoCat_1 != null && cocoCat_2 != null){
                 if(cocoCat_1.equals(cocoCat_2))

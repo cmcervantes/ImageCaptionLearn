@@ -42,7 +42,7 @@ public class ILPSolverThread extends Thread
     private boolean _includeBoxExigence;
     private int _maxRelationLabel;
 
-    private Map<Mention, String> _mentionCatDict;
+    private Map<Mention, List<String>> _mentionCatDict;
 
     /**Constructor for relation inference
      *
@@ -185,9 +185,9 @@ public class ILPSolverThread extends Thread
         //is active, look up all our mentions'
         //COCO categories
         for(Mention m : _mentionList){
-            String cocoCat = Mention.getLexicalEntry_cocoCategory(m, true);
+            String cocoCat = Mention.getLexicalEntry_cocoCategory(m);
             if(cocoCat != null)
-                _mentionCatDict.put(m, cocoCat);
+                _mentionCatDict.put(m, Arrays.asList(cocoCat.split("/")));
         }
     }
 
@@ -388,7 +388,7 @@ public class ILPSolverThread extends Thread
             _addGroundingConstraint_boxExigence(groundingIndices);
 
         if(_includeTypeConstraint)
-            _addGroundingConstraints_category(groundingIndices);
+            _addGroundingConstraints_category(groundingIndices, cardIndices);
 
         //Solve the ILP
         solveGraph(null, groundingIndices, visualIndices);
@@ -467,7 +467,7 @@ public class ILPSolverThread extends Thread
             _addGroundingConstraint_boxExigence(groundingIndices);
 
         if(_includeTypeConstraint)
-            _addGroundingConstraints_category(groundingIndices);
+            _addGroundingConstraints_category(groundingIndices, cardinalityIndices);
 
         //Solve the ILP
         solveGraph(relationIndices, groundingIndices, null);
@@ -747,6 +747,7 @@ public class ILPSolverThread extends Thread
                     }
 
                     /* Type constraints for subsets */
+                    /*
                     if(_includeTypeConstraint){
                         double typeOrPronom_jk = m_j.getPronounType() != Mention.PRONOUN_TYPE.NONE ||
                                 m_k.getPronounType() != Mention.PRONOUN_TYPE.NONE ||
@@ -760,7 +761,7 @@ public class ILPSolverThread extends Thread
 
                         _solver.addLessThanConstraint(new int[]{linkIndices[j][i][2], linkIndices[j][k][2]},
                                 new double[]{1.0, 1.0}, 1.0 + typeOrPronom_ik);
-                    }
+                    }*/
                 }
             }
         }
@@ -894,14 +895,29 @@ public class ILPSolverThread extends Thread
         _solver.addEqualityConstraint(cardinalityLinks_perMention, coeffs_z, 1.0);
     }
 
-    private void _addGroundingConstraints_category(int[][] groundingIndices)
+    /**
+     *
+     * @param groundingIndices
+     * @param cardinalityIndices
+     */
+    private void _addGroundingConstraints_category(int[][] groundingIndices,
+                                                   int[][] cardinalityIndices)
     {
         for(int i=0; i<_mentionList.size(); i++){
             Mention m_i = _mentionList.get(i);
+
+            //Mentions without a cardinality (according to our lexicon)
+            //are not permitted to ground to anything (z^0_i = 1)
+            boolean hasCategory = _mentionCatDict.containsKey(m_i);
+            if(!hasCategory)
+                _solver.addEqualityConstraint(new int[]{cardinalityIndices[i][0]},
+                        new double[]{1.0}, 1.0);
+
+            //Mentions and boxes that do not have the same category
+            //cannot ground together (g_io = 0
             for(int o=0; o<_boxList.size(); o++){
                 BoundingBox b_o = _boxList.get(o);
-                if(!_mentionCatDict.containsKey(m_i) ||
-                   !_mentionCatDict.get(m_i).contains(b_o.getCategory()))
+                if(!hasCategory || !_mentionCatDict.get(m_i).contains(b_o.getCategory()))
                     _solver.addEqualityConstraint(new int[]{groundingIndices[i][o]},
                             new double[]{1.0}, 0.0);
             }
