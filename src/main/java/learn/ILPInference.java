@@ -32,7 +32,7 @@ public class ILPInference
     private Set<String> _failedImgs, _fallbackImgs;
     private String _graphRoot;
     private DoubleDict<String> _groundingAccuracies, _relationAccuracies;
-    private boolean _includeTypeConstr, _excludeBoxExigence, _excludeSubset;
+    private boolean _includeTypeConstr, _excludeBoxExigence, _excludeSubset, _onlyKeepPositiveLinks;
 
     /**Creates a new ILPInference module, using the specified
      * docSet and nonvisual scores file; Performs combined inference
@@ -47,12 +47,14 @@ public class ILPInference
      * @param includeTypeConstr
      * @param excludeBoxExigence
      * @param excludeSubset
+     * @param onlyKeepPositiveLinks
      */
     public ILPInference(Collection<Document> docSet, InferenceType infType,
                         String nonvisScoresFile, String relationScoresFile,
                         String affinityScoresFile, String cardinalityScoresFile,
                         String graphRoot, boolean includeTypeConstr,
-                        boolean excludeBoxExigence, boolean excludeSubset)
+                        boolean excludeBoxExigence, boolean excludeSubset,
+                        boolean onlyKeepPositiveLinks)
     {
         //If we're going to use the type constraint, intitialize the lexicons
         _includeTypeConstr = includeTypeConstr;
@@ -60,6 +62,7 @@ public class ILPInference
             Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
 
         //Store the simple vars
+        _onlyKeepPositiveLinks = onlyKeepPositiveLinks;
         _excludeBoxExigence = excludeBoxExigence;
         _excludeSubset = excludeSubset;
         _infType = infType;
@@ -247,10 +250,12 @@ public class ILPInference
         Map<Integer, ScoreDict<String>> macroAverage_byEntities = new HashMap<>();
         ScoreDict<String> macroAverage = new ScoreDict<>();
         Set<String> labelSet = new HashSet<>();
+        List<Double> accuracies = new ArrayList<>();
         for(Document d : docScoreDict.keySet()){
             int numEntities = d.getChainSet().size();
             ScoreDict<String> scores = docScoreDict.get(d);
             macroAverage.increment(scores);
+            accuracies.add(scores.getAccuracy());
             labelSet.addAll(scores.keySet());
 
             //bin the accuracy and macro average link counts by entity count
@@ -284,14 +289,14 @@ public class ILPInference
         int perfects_total = 0;
         for(Integer entityCount : entityCounts){
             List<Object> row = new ArrayList<>();
-            List<Double> accuracies = accuracies_byEntities.get(entityCount);
+            List<Double> acc_byEntityBin = accuracies_byEntities.get(entityCount);
             ScoreDict<String> scores = macroAverage_byEntities.get(entityCount);
 
             row.add(entityCount);
-            row.add(accuracies.size());
-            row.add(StatisticalUtil.getMean(accuracies) / 100.0);
+            row.add(acc_byEntityBin.size());
+            row.add(StatisticalUtil.getMean(acc_byEntityBin) / 100.0);
             int perfects = 0;
-            for(Double acc : accuracies)
+            for(Double acc : acc_byEntityBin)
                 if(acc == 100)
                     perfects++;
             perfects_total += perfects;
@@ -310,6 +315,8 @@ public class ILPInference
             Logger.log("---- Writing per/entity scores to "+ filename + " ----");
             ot.writeToCsv(filename);
         }
+        System.out.printf("Average Image Accuracy: %.2f%%\n",
+                StatisticalUtil.getMean(accuracies));
         System.out.printf("Perfects: %d (%.2f%%)\n", perfects_total,
                 100.0 * (double)perfects_total / (double)_docDict.size());
     }
@@ -318,6 +325,8 @@ public class ILPInference
     {
         Map<Document, ScoreDict<String>> scoreDict = new HashMap<>();
         DoubleDict<Document> groundingDict = new DoubleDict<>();
+        Map<String, ScoreDict<String>> scoreDict_byCat = new HashMap<>();
+        DoubleDict<String> catDistro = new DoubleDict<>();
         for (Document d : _docDict.values()) {
             List<Mention> mentions = d.getMentionList();
             Set<BoundingBox> boxes = d.getBoundingBoxSet();
@@ -344,6 +353,14 @@ public class ILPInference
                     scores.increment(String.valueOf(gold), String.valueOf(pred));
                     if(gold != pred)
                         foundConflictingLink = true;
+
+
+                    if(!scoreDict_byCat.containsKey(b.getCategory()))
+                        scoreDict_byCat.put(b.getCategory(), new ScoreDict<>());
+                    scoreDict_byCat.get(b.getCategory()).increment(String.valueOf(gold),
+                            String.valueOf(pred));
+                    catDistro.increment(b.getCategory());
+                    catDistro.increment("total");
                 }
 
                 if(!foundConflictingLink)
@@ -352,6 +369,19 @@ public class ILPInference
             scoreDict.put(d, scores);
         }
         _printDocumentScoreDict(scoreDict, filename);
+
+
+        /*
+        System.out.println("-----------------");
+        for(String s : scoreDict_byCat.keySet()) {
+            Score sc = scoreDict_byCat.get(s).getScore("1");
+            System.out.printf("%s,%d,%.2f,%.2f,%.2f,%.2f\n", s,
+                    (int)catDistro.get(s), catDistro.get(s)/catDistro.get("total"),
+                    sc.getPrecision(), sc.getRecall(), sc.getF1());
+        }
+        System.out.println("-----------------");
+        */
+
 
         //Store these image accuracies; otherwise store their difference
         //and print the 50 most improved images
@@ -582,18 +612,20 @@ public class ILPInference
 
     private void _evaluateVisual(Map<String, Integer> predLabelDict, String predType)
     {
-        ScoreDict<Integer> scoreDict = new ScoreDict<>();
+        Map<Document, ScoreDict<String>> scoreDict = new HashMap<>();
         for(Document d : _docDict.values()){
+            ScoreDict<String> scores = new ScoreDict<>();
             for(Mention m : d.getMentionList()){
                 int gold = m.getChainID().equals("0") ? 0 : 1;
                 int pred = 1;
                 if(predLabelDict.containsKey(m.getUniqueID()))
                     pred = predLabelDict.get(m.getUniqueID());
-                scoreDict.increment(gold, pred);
+                scores.increment(String.valueOf(gold), String.valueOf(pred));
             }
+            scoreDict.put(d, scores);
         }
         System.out.println(predType);
-        scoreDict.printCompleteScores();
+        _printDocumentScoreDict(scoreDict, null);
     }
 
     /**Evaluates the predicted box cardinalities in the predLabelDict
@@ -996,16 +1028,9 @@ public class ILPInference
         if(fixedLinks != null && !fixedLinks.isEmpty())
             thread.setFixedRelationLinks(fixedLinks);
 
-        if(!_nonvisScores.isEmpty()) {
+        if(!_nonvisScores.isEmpty())
             thread.setNonvisScores(_nonvisScores);
-        } else{
-            /*
-            Map<String, Integer> fixedVisualMentions = new HashMap<>();
-            for(Document d : _docDict.values())
-                for(Mention m : d.getMentionList())
-                    fixedVisualMentions.put(m.getUniqueID(), m.getChainID().equals("0") ? 0 : 1);
-            thread.setFixedVisualMentions(fixedVisualMentions);*/
-        }
+
         if(InferenceType.isRelationType(_infType)){
             thread.setRelationScores(_relationScores);
             if(_excludeSubset)
@@ -1020,6 +1045,8 @@ public class ILPInference
                 thread.excludeBoxExigence();
             if(_includeTypeConstr)
                 thread.includeTypeConstraint();
+            if(_onlyKeepPositiveLinks)
+                thread.onlyKeepPositiveLinks();
         }
 
         return thread;
@@ -1050,7 +1077,7 @@ public class ILPInference
             docIds.removeAll(_relationGraphs.keySet());
             docIds.removeAll(_groundingGraphs.keySet());
             _infer(docIds, fixedCorefLinks, 1, numThreads);
-        } else if(!InferenceType.isFullJointType(_infType)){
+        } else if(!InferenceType.isJointType(_infType)){
             //If this is not three-way joint inference, we can run one document
             //per thread, giving gurobi one thread, and itll be done relatively
             //quickly
@@ -1249,42 +1276,62 @@ public class ILPInference
         }
     }
 
-    /**InferenceType specifies whether we're doing
-     * Relation, Grounding, or Combined inference
+    /**InferenceType specifies the type of inference
+     * we're running. At the time of this writing (12/17)
+     * there are three main inference modules
+     *      visual
+     *      relation
+     *      grounding
+     * Which give us the following two-way combinations of interest
+     *      visual_relation
+     *      visual_grounding
+     *      relation_grounding
+     * The natural three-way joint inference
+     *      visual_relation_grounding
+     * And the following sequential modes
+     *      grounding_then_relation
+     *      grounding_then_visual_relation
+     *      relation_then_grounding
+     *      relation_then_visual_grounding
      *
+     * Note that, naturally, there are other combination we don't include,
+     * since visual prediction is generally unhelpful
      */
     public enum InferenceType {
-        RELATION, GROUNDING, VISUAL_RELATION, VISUAL_GROUNDING,
-        JOINT, JOINT_AFTER_VISUAL, JOINT_AFTER_RELATION,
-        JOINT_AFTER_GROUNDING, NONVIS_JOINT;
+        VISUAL, RELATION, GROUNDING,
+        VISUAL_RELATION, VISUAL_GROUNDING, RELATION_GROUNDING,
+        VISUAL_RELATION_GROUNDING,
+        GROUNDING_THEN_RELATION, GROUNDING_THEN_VISUAL_RELATION,
+        RELATION_THEN_GROUNDING, RELATION_THEN_VISUAL_GROUNDING;
 
         private static Set<InferenceType> _visualTypes, _relationTypes, _groundingTypes;
-        private static Set<InferenceType> _fullJointTypes;
+        private static Set<InferenceType> _jointTypes; // Types that require inference over
+                                                       // at least two graphs
         static {
-            InferenceType[] visualTypeArr = {VISUAL_RELATION, VISUAL_GROUNDING, JOINT,
-                                             JOINT_AFTER_VISUAL, JOINT_AFTER_RELATION,
-                                             JOINT_AFTER_GROUNDING};
+            InferenceType[] visualTypeArr = {VISUAL, VISUAL_RELATION, VISUAL_GROUNDING,
+                 VISUAL_RELATION_GROUNDING, GROUNDING_THEN_VISUAL_RELATION,
+                 RELATION_THEN_VISUAL_GROUNDING};
             _visualTypes = new HashSet<>(Arrays.asList(visualTypeArr));
 
-            InferenceType[] relationTypeArr = {RELATION, VISUAL_RELATION, JOINT,
-                                               JOINT_AFTER_VISUAL, JOINT_AFTER_RELATION,
-                                               JOINT_AFTER_GROUNDING, NONVIS_JOINT};
+            InferenceType[] relationTypeArr = {RELATION, VISUAL_RELATION, VISUAL_RELATION_GROUNDING,
+                GROUNDING_THEN_RELATION, GROUNDING_THEN_VISUAL_RELATION,
+                RELATION_THEN_GROUNDING, RELATION_THEN_VISUAL_GROUNDING};
             _relationTypes = new HashSet<>(Arrays.asList(relationTypeArr));
 
-            InferenceType[] groundingTypeArr = {GROUNDING, VISUAL_GROUNDING, JOINT,
-                                                JOINT_AFTER_VISUAL, JOINT_AFTER_RELATION,
-                                                JOINT_AFTER_GROUNDING, NONVIS_JOINT};
+            InferenceType[] groundingTypeArr = {GROUNDING, VISUAL_GROUNDING, VISUAL_RELATION_GROUNDING,
+                GROUNDING_THEN_RELATION, GROUNDING_THEN_VISUAL_RELATION,
+                RELATION_THEN_GROUNDING, RELATION_THEN_VISUAL_GROUNDING};
             _groundingTypes = new HashSet<>(Arrays.asList(groundingTypeArr));
 
-            InferenceType[] fullJointTypeArr = {JOINT, JOINT_AFTER_VISUAL, JOINT_AFTER_RELATION,
-                                                JOINT_AFTER_GROUNDING, NONVIS_JOINT};
-            _fullJointTypes = new HashSet<>(Arrays.asList(fullJointTypeArr));
-
+            InferenceType[] fullJointTypeArr = {VISUAL_RELATION, VISUAL_GROUNDING, RELATION_GROUNDING,
+                VISUAL_RELATION_GROUNDING, GROUNDING_THEN_VISUAL_RELATION,
+                RELATION_THEN_VISUAL_GROUNDING};
+            _jointTypes = new HashSet<>(Arrays.asList(fullJointTypeArr));
         }
 
         public static boolean isVisualType(InferenceType t){return _visualTypes.contains(t);}
         public static boolean isRelationType(InferenceType t){return _relationTypes.contains(t);}
         public static boolean isGroundingType(InferenceType t){return _groundingTypes.contains(t);}
-        public static boolean isFullJointType(InferenceType t){return _fullJointTypes.contains(t);}
+        public static boolean isJointType(InferenceType t){return _jointTypes.contains(t);}
     }
 }

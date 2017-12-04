@@ -40,6 +40,7 @@ public class ILPSolverThread extends Thread
     private boolean _includeSubset;
     private boolean _includeTypeConstraint;
     private boolean _includeBoxExigence;
+    private boolean _onlyKeepPositiveLinks;
     private int _maxRelationLabel;
 
     private Map<Mention, List<String>> _mentionCatDict;
@@ -94,6 +95,7 @@ public class ILPSolverThread extends Thread
         _includeSubset = true;
         _includeTypeConstraint = false;
         _includeBoxExigence = true;
+        _onlyKeepPositiveLinks =  false;
         _maxRelationLabel = 3;
         _mentionCatDict = new HashMap<>();
 
@@ -172,11 +174,8 @@ public class ILPSolverThread extends Thread
     }
 
     /**Specifies that a type constraint should be used during
-     * inference (which inference -- and which type constraint --
-     * has changed over multiple revisions)
-     *
+     * inference
      */
-    @Deprecated
     public void includeTypeConstraint()
     {
         _includeTypeConstraint = true;
@@ -189,6 +188,16 @@ public class ILPSolverThread extends Thread
             if(cocoCat != null)
                 _mentionCatDict.put(m, Arrays.asList(cocoCat.split("/")));
         }
+    }
+
+    /**Specifies that only positive links should be kept in
+     * our sequential inference schemes (implemented for
+     * grounding_then_relation for coco), rather than
+     * all links
+     */
+    public void onlyKeepPositiveLinks()
+    {
+        _onlyKeepPositiveLinks = true;
     }
 
     /**WSpecifies that the box exigence constraint should
@@ -244,49 +253,76 @@ public class ILPSolverThread extends Thread
      * internal inference type
      */
     public void run() {
+        boolean includeVisual = false;
         switch (_infType) {
-            case RELATION: run_relation(false);
+            case VISUAL: run_visual();
                 break;
-            case VISUAL_RELATION: run_relation(true);
+            case VISUAL_RELATION: includeVisual = true;
+            case RELATION: run_relation(includeVisual);
                 break;
-            case GROUNDING: run_grounding(false);
+            case VISUAL_GROUNDING: includeVisual = true;
+            case GROUNDING: run_grounding(includeVisual);
                 break;
-            case VISUAL_GROUNDING: run_grounding(true);
+            case VISUAL_RELATION_GROUNDING: includeVisual = true;
+            case RELATION_GROUNDING: run_joint(includeVisual);
                 break;
-            case JOINT: run_joint(true);
+            case GROUNDING_THEN_VISUAL_RELATION: includeVisual = true;
+            case GROUNDING_THEN_RELATION:
+                run_grounding(false);
+                _fixedGroundingLinks = new HashMap<>();
+                if(_onlyKeepPositiveLinks){
+                    for(String key : _groundingGraph.keySet())
+                        if(_groundingGraph.get(key) == 1)
+                            _fixedGroundingLinks.put(key, 1);
+                } else {
+                    _fixedGroundingLinks = new HashMap<>(_groundingGraph);
+                }
+                _groundingGraph = new HashMap<>();
+                run_joint(includeVisual);
                 break;
-            case JOINT_AFTER_VISUAL:
-                _mentionList.forEach(m -> _fixedVisualMentions.put(m.getUniqueID(),
-                        _nonvisScores.get(m.getUniqueID()) > 0.5 ? 0 : 1));
-                run_joint(true);
-                break;
-            case JOINT_AFTER_RELATION: run_relation(false);
+            case RELATION_THEN_VISUAL_GROUNDING: includeVisual = true;
+            case RELATION_THEN_GROUNDING:
+                run_relation(false);
                 _fixedRelationLinks = new HashMap<>(_relationGraph);
                 _relationGraph = new HashMap<>();
-                run_joint(true);
-                break;
-            case JOINT_AFTER_GROUNDING: run_grounding(false);
-                _fixedGroundingLinks = new HashMap<>(_groundingGraph);
-                _groundingGraph = new HashMap<>();
-                run_joint(true);
-                break;
-            case NONVIS_JOINT: run_joint(false);
+                run_joint(includeVisual);
                 break;
         }
 
         //If we failed to find a joint solution, find solutions by doing joint
         //rel/vis and ground/vis
-        if(ILPInference.InferenceType.isFullJointType(_infType) && !_foundSolution){
+        if(ILPInference.InferenceType.isJointType(_infType) && !_foundSolution){
             _fallbackSolution = true;
             _relationGraph = new HashMap<>(); _groundingGraph = new HashMap<>();
             _resetSolver();
-            boolean includeVis = _infType != ILPInference.InferenceType.NONVIS_JOINT;
+            boolean includeVis = _infType != ILPInference.InferenceType.RELATION_GROUNDING;
             run_grounding(includeVis);
             boolean solvedGrounding = _foundSolution;
             _resetSolver();
             run_relation(includeVis);
             _foundSolution &= solvedGrounding;
         }
+    }
+
+    /**Sets up and runs the ILP solver for visual inference, which
+     * should be functionally identical to using an argmax over affinity
+     * predictions
+     *
+     */
+    private void run_visual()
+    {
+        int[] visualIndices = new int[_mentionList.size()];
+        for (int i = 0; i < _mentionList.size(); i++) {
+            Mention m_i = _mentionList.get(i);
+            visualIndices[i] = _addVisualVariable_vis(m_i.getUniqueID());
+            _addVisualVariable_nonvis(m_i.getUniqueID(), visualIndices[i]);
+        }
+
+        //Add fixed visual links
+        _addVisualConstraints_fixed(visualIndices);
+
+        //Solve the ILP
+        solveGraph(null, null, visualIndices);
     }
 
     /**
@@ -470,7 +506,7 @@ public class ILPSolverThread extends Thread
             _addGroundingConstraints_category(groundingIndices, cardinalityIndices);
 
         //Solve the ILP
-        solveGraph(relationIndices, groundingIndices, null);
+        solveGraph(relationIndices, groundingIndices, visualIndices);
     }
 
     /**Calls the solver to solve the ILP graph and stores the graph(s)
@@ -745,23 +781,6 @@ public class ILPSolverThread extends Thread
                                         linkIndices[k][j][y], linkIndices[k][i][y]},
                                 new double[]{1.0, 1.0, -1.0}, 1.0);
                     }
-
-                    /* Type constraints for subsets */
-                    /*
-                    if(_includeTypeConstraint){
-                        double typeOrPronom_jk = m_j.getPronounType() != Mention.PRONOUN_TYPE.NONE ||
-                                m_k.getPronounType() != Mention.PRONOUN_TYPE.NONE ||
-                                Mention.getLexicalTypeMatch(m_j, m_k) > 0 ? 1.0 : 0.0;
-                        double typeOrPronom_ik = m_i.getPronounType() != Mention.PRONOUN_TYPE.NONE ||
-                                m_k.getPronounType() != Mention.PRONOUN_TYPE.NONE ||
-                                Mention.getLexicalTypeMatch(m_i, m_k) > 0 ? 1.0 : 0.0;
-
-                        _solver.addLessThanConstraint(new int[]{linkIndices[i][j][2], linkIndices[i][k][2]},
-                                new double[]{1.0, 1.0}, 1.0 + typeOrPronom_jk);
-
-                        _solver.addLessThanConstraint(new int[]{linkIndices[j][i][2], linkIndices[j][k][2]},
-                                new double[]{1.0, 1.0}, 1.0 + typeOrPronom_ik);
-                    }*/
                 }
             }
         }

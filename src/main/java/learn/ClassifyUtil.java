@@ -943,7 +943,7 @@ public abstract class ClassifyUtil {
     public static void exportStanfordCorefConll(Collection<Document> docSet)
     {
         Logger.log("Initializing Stanford Annotation object");
-        StanfordAnnotator stanfordAnno = StanfordAnnotator.createCoreference(false);
+        StanfordAnnotator stanfordAnno = StanfordAnnotator.createCoreference(true);
 
         Logger.log("Processing documents; writing .conll files to out/stanford/");
         int docIdx = 0;

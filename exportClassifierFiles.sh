@@ -41,7 +41,7 @@ for dataset in ${datasets[@]}; do
                 if [[ $type == "neural" ]]; then
                     cmd_str="${cmd_str} --for_neural"
                 fi
-                success=eval "${cmd_str}"
+                success= eval "${cmd_str}"
                 if ! [[ success ]]; then
                     exit
                 fi
@@ -49,3 +49,5 @@ for dataset in ${datasets[@]}; do
         done
     done
 done
+
+echo "Done!"
