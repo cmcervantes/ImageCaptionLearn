@@ -251,8 +251,6 @@ public class Overlord
             } else if(parser.getBoolean("mod_subset")){
                 Minion.export_modSubsetFeats(docSet, split);
             } else {
-                ClassifyUtil.exportStanfordCorefConll(docSet);
-                System.exit(0);
 
                 ClassifyUtil.evaluateAffinity_cocoHeuristic(docSet);
                 System.exit(0);

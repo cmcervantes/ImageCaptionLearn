@@ -335,28 +335,23 @@ public class ILPSolverThread extends Thread
         for (int i = 0; i < _mentionList.size(); i++) {
             Mention m_i = _mentionList.get(i);
 
+            //If running relation inference alone, we want to
+            //the unmodified relation scores. Otherwise, the
+            //relation scores must be divided by the number of mentions
+            //so that each mention m_i has 0-1 confidence in being
+            //visual and 0-1 total confidence in all its relation decisions
+            double coeff = 1.0;
+
             //Add our predictions that this mention is visual or nonvisual
             //to the objective
             if(includeVisual){
+                coeff = 2.0 / (double)_mentionList.size();
                 visualIndices[i] = _addVisualVariable_vis(m_i.getUniqueID());
                 _addVisualVariable_nonvis(m_i.getUniqueID(), visualIndices[i]);
             }
 
-            for (int j = i + 1; j < _mentionList.size(); j++) {
-                Mention m_j = _mentionList.get(j);
-
-                //Add boolean variables for each label, each direction
-                String id_ij = Document.getMentionPairStr(m_i, m_j);
-                String id_ji = Document.getMentionPairStr(m_j, m_i);
-
-                for (int y = 0; y <= _maxRelationLabel; y++) {
-                    relationIndices[i][j][y] = _addRelationVariable(id_ij, y, 1.0);
-                    relationIndices[j][i][y] = _addRelationVariable(id_ji, y, 1.0);
-                }
-
-                //Add pairwise relation constraints
-                _addRelationConstraints_pairwise(relationIndices[i][j], relationIndices[j][i]);
-            }
+            //Add the relation variables for the links from i to j
+            _addRelationVariablesForMention(i, coeff, relationIndices);
         }
 
         //Add visual relation links
@@ -387,26 +382,23 @@ public class ILPSolverThread extends Thread
         for (int i = 0; i < _mentionList.size(); i++) {
             Mention m_i = _mentionList.get(i);
 
+            //Boxes are always normalized by the number of boxes in the list;
+            //cardinality is only normalized when we are predicting visual as well
+            double boxCoeff = 1.0 / (double)_boxList.size();
+            double cardCoeff = 1.0;
+
             //Add our predictions that this mention is visual or nonvisual
             //to the objective
             if(includeVisual){
+                boxCoeff *= 0.5;
+                cardCoeff = 0.5;
                 visualIndices[i] = _addVisualVariable_vis(m_i.getUniqueID());
                 nonvisualIndices[i] = _addVisualVariable_nonvis(m_i.getUniqueID(), visualIndices[i]);
             }
 
-            int[] groundingIndices_perMention = new int[_boxList.size()];
-            for (int o = 0; o < _boxList.size(); o++) {
-                BoundingBox b_g = _boxList.get(o);
-                String id_io = m_i.getUniqueID() + "|" + b_g.getUniqueID();
-                groundingIndices[i][o] = _addGroundingVariable_affinity(id_io, 1.0 / (double)_boxList.size());
-                antiGroundingIndices[i][o] = _addGroundingVariable_antiAffinity(id_io,
-                        groundingIndices[i][o]);
-                groundingIndices_perMention[o] = groundingIndices[i][o];
-            }
-
-            //Add the cardinality variables
-            cardIndices[i] = _addGroundingVariable_cardinality(m_i.getUniqueID(), 1.0);
-            _addGroundingConstraint_cardinality(groundingIndices_perMention, cardIndices[i]);
+            //Add the grounding variables to the graph
+            _addGroundingVariablesForMention(i, boxCoeff, cardCoeff, groundingIndices,
+                    antiGroundingIndices, cardIndices);
         }
 
         //Add the visual grounding constraints
@@ -444,40 +436,27 @@ public class ILPSolverThread extends Thread
         for (int i = 0; i < _mentionList.size(); i++) {
             Mention m_i = _mentionList.get(i);
 
+            //For joint inference, we must normalize the relation scores to be in
+            //the 0-1 range and the box+card scores to be in the 0-1 range; adding visual
+            //does not require us to change these coefficients, as it simply makes
+            //the objective go from 0-2 per mention (equal weight on each task)
+            //to 0-3 per mention (equal weight on each task)
+            double relCoeff = 2.0 / (double)_mentionList.size();
+            double boxCoeff = 1.0 / (2.0 * (double)_boxList.size());
+            double cardCoeff = 0.5;
+
             //Visual variables
             if(includeVisual){
                 visualIndices[i] = _addVisualVariable_vis(m_i.getUniqueID());
                 nonvisualIndices[i] = _addVisualVariable_nonvis(m_i.getUniqueID(), visualIndices[i]);
             }
 
-            //Relation variables
-            for (int j = i + 1; j < _mentionList.size(); j++) {
-                Mention m_j = _mentionList.get(j);
-
-                //Add boolean variables for each label, each direction
-                String id_ij = Document.getMentionPairStr(m_i, m_j);
-                String id_ji = Document.getMentionPairStr(m_j, m_i);
-                for (int y = 0; y <= _maxRelationLabel; y++) {
-                    relationIndices[i][j][y] = _addRelationVariable(id_ij, y, 1.0);
-                    relationIndices[j][i][y] = _addRelationVariable(id_ji, y, 1.0);
-                }
-
-                //Add pairwise relation constraints
-                _addRelationConstraints_pairwise(relationIndices[i][j], relationIndices[j][i]);
-            }
+            //Relation variables from i to j
+            _addRelationVariablesForMention(i, relCoeff, relationIndices);
 
             //Grounding variables
-            int[] groundingIndices_perMention = new int[_boxList.size()];
-            for (int o = 0; o < _boxList.size(); o++) {
-                BoundingBox b_g = _boxList.get(o);
-                String id_io = m_i.getUniqueID() + "|" + b_g.getUniqueID();
-                groundingIndices[i][o] = _addGroundingVariable_affinity(id_io, 1.0 / (2.0 * _boxList.size()));
-                antiGroundingIndices[i][o] = _addGroundingVariable_antiAffinity(id_io,
-                        groundingIndices[i][o]);
-                groundingIndices_perMention[o] = groundingIndices[i][o];
-            }
-            cardinalityIndices[i] = _addGroundingVariable_cardinality(m_i.getUniqueID(), 0.5);
-            _addGroundingConstraint_cardinality(groundingIndices_perMention, cardinalityIndices[i]);
+            _addGroundingVariablesForMention(i, boxCoeff, cardCoeff, groundingIndices,
+                    antiGroundingIndices, cardinalityIndices);
         }
 
         //Add grounded relation constraints
@@ -549,6 +528,35 @@ public class ILPSolverThread extends Thread
         if (_relScores.containsKey(pairID))
             score = Math.max(0, coeff * _relScores.get(pairID)[label]);
         return _solver.addBooleanVariable(score);
+    }
+
+    /**Adds the relation variables for the links between the mention
+     * at the given index and all mentions between mIdx and
+     * _mentionList.size()-1 using the given coefficient;
+     * implemented to avoid dup code in relation and joint inference
+     *
+     * @param mIdx
+     * @param coeff
+     * @return
+     */
+    private void _addRelationVariablesForMention(int mIdx, double coeff, int[][][] relationIndices)
+    {
+        Mention m_i = _mentionList.get(mIdx);
+        for (int j = mIdx + 1; j < _mentionList.size(); j++) {
+            Mention m_j = _mentionList.get(j);
+
+            //Add boolean variables for each label, each direction
+            String id_ij = Document.getMentionPairStr(m_i, m_j);
+            String id_ji = Document.getMentionPairStr(m_j, m_i);
+
+            for (int y = 0; y <= _maxRelationLabel; y++) {
+                relationIndices[mIdx][j][y] = _addRelationVariable(id_ij, y, coeff);
+                relationIndices[j][mIdx][y] = _addRelationVariable(id_ji, y, coeff);
+            }
+
+            //Add pairwise relation constraints
+            _addRelationConstraints_pairwise(relationIndices[mIdx][j], relationIndices[j][mIdx]);
+        }
     }
 
     /**Adds a boolean visual variable to the solver; given
@@ -623,6 +631,40 @@ public class ILPSolverThread extends Thread
         _solver.addEqualityConstraint(new int[]{affinityIdx, antiAffinityIdx},
                 new double[]{1.0, 1.0}, 1.0);
         return antiAffinityIdx;
+    }
+
+    /**Adds the grounding and cardinality variables for the mention at
+     * the given index; adding grounding variables, anti-grounding variables,
+     * and cardinality variables to the graph with the given boxCoeff and
+     * cardCoeff coefficients
+     *
+     * @param mIdx
+     * @param boxCoeff
+     * @param cardCoeff
+     * @param groundingIndices
+     * @param antiGroundingIndices
+     * @param cardinalityIndices
+     */
+    private void _addGroundingVariablesForMention(int mIdx, double boxCoeff, double cardCoeff,
+                                                  int[][] groundingIndices,
+                                                  int[][] antiGroundingIndices,
+                                                  int[][] cardinalityIndices)
+    {
+        //Add all links to boxes
+        Mention m_i = _mentionList.get(mIdx);
+        int[] groundingIndices_perMention = new int[_boxList.size()];
+        for (int o = 0; o < _boxList.size(); o++) {
+            BoundingBox b_g = _boxList.get(o);
+            String id_io = m_i.getUniqueID() + "|" + b_g.getUniqueID();
+            groundingIndices[mIdx][o] = _addGroundingVariable_affinity(id_io, boxCoeff);
+            antiGroundingIndices[mIdx][o] = _addGroundingVariable_antiAffinity(id_io,
+                    groundingIndices[mIdx][o]);
+            groundingIndices_perMention[o] = groundingIndices[mIdx][o];
+        }
+
+        //Add the cardinality variables
+        cardinalityIndices[mIdx] = _addGroundingVariable_cardinality(m_i.getUniqueID(), cardCoeff);
+        _addGroundingConstraint_cardinality(groundingIndices_perMention, cardinalityIndices[mIdx]);
     }
 
     /**Adds the cardinality variable, which is one only when a mention

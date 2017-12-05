@@ -921,8 +921,14 @@ public abstract class ClassifyUtil {
     {
         Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
         ScoreDict<Integer> scoreDict = new ScoreDict<>();
+        int perfectImgs = 0;
+        int perfectMentions = 0;
+        int totalMentions = 0;
         for(Document d : docSet){
+            totalMentions += d.getMentionList().size();
+            boolean perfectImage = true;
             for(Mention m : d.getMentionList()){
+                boolean perfectMention = true;
                 Set<BoundingBox> assocBoxes = d.getBoxSetForMention(m);
                 String mentionCatStr = Mention.getLexicalEntry_cocoCategory(m);
                 Set<String> mentionCats = new HashSet<>();
@@ -933,10 +939,20 @@ public abstract class ClassifyUtil {
                     int gold = assocBoxes.contains(b) ? 1 : 0;
                     int pred = !mentionCats.isEmpty() &&
                             mentionCats.contains(b.getCategory()) ? 1 : 0;
+                    perfectMention &= gold == pred;
                     scoreDict.increment(gold, pred);
                 }
+                perfectImage &= perfectMention;
+                if(perfectMention)
+                    perfectMentions++;
             }
+            if(perfectImage)
+                perfectImgs++;
         }
+        System.out.printf("Perfect images: %d (%.2f%%)\n", perfectImgs,
+                100.0 * perfectImgs / (double)docSet.size());
+        System.out.printf("Perfect mentions: %d (%.2f%%)\n",
+                perfectMentions, 100.0 * perfectMentions / (double)totalMentions);
         scoreDict.printCompleteScores();
     }
 

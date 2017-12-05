@@ -213,9 +213,9 @@ public class ILPInference
      */
     private void _loadGraphs()
     {
-        String filename_relation = _graphRoot + "_relation.obj";
-        String filename_grounding = _graphRoot + "_grounding.obj";
-        String filename_visual = _graphRoot + "_visual.obj";
+        String filename_relation = _graphRoot + "_REL.obj";
+        String filename_grounding = _graphRoot + "_GRND.obj";
+        String filename_visual = _graphRoot + "_VIS.obj";
         File f_rel = new File(filename_relation);
         File f_grnd = new File(filename_grounding);
         File f_vis = new File(filename_visual);
@@ -1207,7 +1207,7 @@ public class ILPInference
                     //or its ID, depending on whether it found a solution
                     ILPSolverThread ist = (ILPSolverThread)threadPool[i];
                     if(ist.foundSolution()){
-                        _addGraphsToDict(ist);
+                        _saveUpdatedGraph(ist);
                         if(ist.isFallbackSolution()){
                             _fallbackImgs.add(ist.getDocID());
                             Logger.log("WARNING: Fallback solution for " + ist.getDocID());
@@ -1243,7 +1243,7 @@ public class ILPInference
             if(threadPool[i] != null){
                 ILPSolverThread ist = (ILPSolverThread)threadPool[i];
                 if(ist.foundSolution()){
-                    _addGraphsToDict(ist);
+                    _saveUpdatedGraph(ist);
                 } else {
                     _failedImgs.add(ist.getDocID());
                     Logger.log("ERROR: failed to solve " + ist.getDocID());
@@ -1259,20 +1259,20 @@ public class ILPInference
      *
      * @param ist
      */
-    private void _addGraphsToDict(ILPSolverThread ist)
+    private void _saveUpdatedGraph(ILPSolverThread ist)
     {
         //Add the new graphs to the dictionary and update our saved objects
         if(!_relationGraphs.containsKey(ist.getDocID())){
             _relationGraphs.put(ist.getDocID(), ist.getRelationGraph());
-            FileIO.writeObject(_relationGraphs, _graphRoot + "_relation.obj");
+            FileIO.writeObject(_relationGraphs, _graphRoot + "_REL.obj");
         }
         if(!_groundingGraphs.containsKey(ist.getDocID())) {
             _groundingGraphs.put(ist.getDocID(), ist.getGroundingGraph());
-            FileIO.writeObject(_groundingGraphs, _graphRoot + "_grounding.obj");
+            FileIO.writeObject(_groundingGraphs, _graphRoot + "_GRND.obj");
         }
         if(!_visualGraphs.containsKey(ist.getDocID())){
             _visualGraphs.put(ist.getDocID(), ist.getVisualGraph());
-            FileIO.writeObject(_visualGraphs, _graphRoot + "_visual.obj");
+            FileIO.writeObject(_visualGraphs, _graphRoot + "_VIS.obj");
         }
     }
 
@@ -1314,19 +1314,19 @@ public class ILPInference
             _visualTypes = new HashSet<>(Arrays.asList(visualTypeArr));
 
             InferenceType[] relationTypeArr = {RELATION, VISUAL_RELATION, VISUAL_RELATION_GROUNDING,
-                GROUNDING_THEN_RELATION, GROUNDING_THEN_VISUAL_RELATION,
+                GROUNDING_THEN_RELATION, GROUNDING_THEN_VISUAL_RELATION, RELATION_GROUNDING,
                 RELATION_THEN_GROUNDING, RELATION_THEN_VISUAL_GROUNDING};
             _relationTypes = new HashSet<>(Arrays.asList(relationTypeArr));
 
             InferenceType[] groundingTypeArr = {GROUNDING, VISUAL_GROUNDING, VISUAL_RELATION_GROUNDING,
-                GROUNDING_THEN_RELATION, GROUNDING_THEN_VISUAL_RELATION,
+                GROUNDING_THEN_RELATION, GROUNDING_THEN_VISUAL_RELATION, RELATION_GROUNDING,
                 RELATION_THEN_GROUNDING, RELATION_THEN_VISUAL_GROUNDING};
             _groundingTypes = new HashSet<>(Arrays.asList(groundingTypeArr));
 
-            InferenceType[] fullJointTypeArr = {VISUAL_RELATION, VISUAL_GROUNDING, RELATION_GROUNDING,
-                VISUAL_RELATION_GROUNDING, GROUNDING_THEN_VISUAL_RELATION,
+            InferenceType[] jointTypeArr = {VISUAL_RELATION, VISUAL_GROUNDING, RELATION_GROUNDING,
+                VISUAL_RELATION_GROUNDING, GROUNDING_THEN_VISUAL_RELATION, RELATION_GROUNDING,
                 RELATION_THEN_VISUAL_GROUNDING};
-            _jointTypes = new HashSet<>(Arrays.asList(fullJointTypeArr));
+            _jointTypes = new HashSet<>(Arrays.asList(jointTypeArr));
         }
 
         public static boolean isVisualType(InferenceType t){return _visualTypes.contains(t);}
