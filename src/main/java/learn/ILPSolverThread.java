@@ -287,6 +287,47 @@ public class ILPSolverThread extends Thread
                 _relationGraph = new HashMap<>();
                 run_joint(includeVisual);
                 break;
+            case RELATION_GROUNDING_MERGE:
+                //Run relation and grounding separately,
+                //add all grounding links to all coreferent mentions
+                run_relation(false);
+                run_grounding(false);
+                for(int i=0; i<_mentionList.size(); i++){
+                    Mention m_i = _mentionList.get(i);
+                    for(int j=i+1; j<_mentionList.size(); j++) {
+                        Mention m_j = _mentionList.get(j);
+                        String id_ij = Document.getMentionPairStr(m_i, m_j);
+                        String id_ji = Document.getMentionPairStr(m_j, m_i);
+                        int label_ij = _relationGraph.get(id_ij);
+                        int label_ji = _relationGraph.get(id_ji);
+
+                        for (int o = 0; o < _boxList.size(); o++) {
+                            BoundingBox b_o = _boxList.get(o);
+                            String id_io = Document.getMentionBoxStr(m_i, b_o);
+                            String id_jo = Document.getMentionBoxStr(m_j, b_o);
+
+                            if (label_ij == 1 && label_ji == 1) {
+                                //Now that we know these mentions are coreferent, give the groundings
+                                //from i to j and vice versa
+                                if (_groundingGraph.get(id_io) == 1)
+                                    _groundingGraph.put(id_jo, 1);
+                                if (_groundingGraph.get(id_jo) == 1)
+                                    _groundingGraph.put(id_io, 1);
+                            } else if (label_ij == 2 && label_ji == 3) {
+                                //m_i is a subset of m_j, so all of m_i's boxes
+                                //must also be ground to m_j
+                                if(_groundingGraph.get(id_io) == 1)
+                                    _groundingGraph.put(id_jo, 1);
+                            } else if (label_ij == 3 && label_ji == 2) {
+                                //m_j is a subset of m_i, so all of m_j's boxes
+                                //must also be ground to m_i
+                                if (_groundingGraph.get(id_jo) == 1)
+                                    _groundingGraph.put(id_io, 1);
+                            }
+                        }
+                    }
+                }
+            break;
         }
 
         //If we failed to find a joint solution, find solutions by doing joint
@@ -444,6 +485,9 @@ public class ILPSolverThread extends Thread
             double relCoeff = 2.0 / (double)_mentionList.size();
             double boxCoeff = 1.0 / (2.0 * (double)_boxList.size());
             double cardCoeff = 0.5;
+            //boxCoeff *= 2.0;
+            //cardCoeff *= 2.0;
+            //relCoeff *= 2.0;
 
             //Visual variables
             if(includeVisual){

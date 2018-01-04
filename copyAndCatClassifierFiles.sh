@@ -6,6 +6,7 @@ datasets=("flickr30k" "mscoco")
 splits=("train" "dev" "test")
 types=("neural" "classifier")
 
+
 # Copy relevant cardinality files to the same directory with the 'affinity' name,
 for dataset in ${datasets[@]}; do
     for split in ${splits[@]}; do

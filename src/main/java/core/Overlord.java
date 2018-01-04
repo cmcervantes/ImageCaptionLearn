@@ -4,6 +4,7 @@ import learn.ClassifyUtil;
 import learn.ILPInference;
 import learn.Preprocess;
 import learn.WekaMulticlass;
+import out.OutTable;
 import statistical.ScoreDict;
 import structures.BoundingBox;
 import structures.Chain;
@@ -35,11 +36,11 @@ public class Overlord
 
     //Dataset Paths
     public static String flickr30kPath = "/shared/projects/Flickr30kEntities_v2/";
-    public static String flickr30kPath_legacy = "/shared/projects/Flickr30kEntities/";
+    public static String flickr30kPath_v1 = "/shared/projects/Flickr30kEntities/";
     public static String[] flickr30k_mysqlParams =
             {"ccervan2.web.engr.illinois.edu", "ccervan2_root", "thenIdefyheaven!", "ccervan2_imageCaption"};
     public static String flickr30k_sqlite = flickr30kPath + "Flickr30kEntities_v2.db";
-    public static String flickr30k_sqlite_legacy = flickr30kPath_legacy + "Flickr30kEntities_v1.db";
+    public static String flickr30k_sqlite_v1 = flickr30kPath_v1 + "Flickr30kEntities_v1.db";
     public static String flickr30kResources = flickr30kPath + "resources/";
     public static String flickr30k_lexicon = "/shared/projects/Flickr30k/lexicons/";
     public static String mscocoPath = "/shared/projects/MSCOCO/";
@@ -78,7 +79,7 @@ public class Overlord
                 "Writes output to file with ROOT prefix", "ROOT", null);
         parser.setArgument("--threads", "Uses NUM threads, where applicable",
                 Integer.class, 1, "NUM", false, null);
-        String[] datasetOpts = {"flickr30k", "mscoco"};
+        String[] datasetOpts = {"flickr30k", "mscoco", "flickr30k_v1"};
         parser.setArgument_opts("--data", datasetOpts, "flickr30k",
                 "Uses the specified dataset", null);
         String[] dataSplitOpts = {"train", "dev", "test", "all"};
@@ -165,11 +166,10 @@ public class Overlord
         parser.setArgument("--cardinality_scores",
                 "Cardinality scores file; associates mention unique IDs with [0,1] "+
                 "(0-10,11+) cardinality prediction", String.class, null, "FILE", false, "Infer");
-        parser.setArgument_opts("--inf_type", new String[]{"visual", "relation", "grounding",
-                "visual_relation", "visual_grounding", "relation_grounding",
-                "visual_relation_grounding", "grounding_then_relation",
-                "grounding_then_visual_relation", "relation_then_grounding",
-                "relation_then_visual_grounding"}, null,
+        List<ILPInference.InferenceType> infTypes = Arrays.asList(ILPInference.InferenceType.values());
+        List<String> infTypeStrs = new ArrayList<>();
+        infTypes.forEach(t -> infTypeStrs.add(t.toString().toLowerCase()));
+        parser.setArgument_opts("--inf_type", infTypeStrs.toArray(new String[]{}), null,
                 "Specifies which inference module to use", "Infer");
         parser.setArgument_flag("--include_type_constraint", "Enables the inference type constraint", "Infer");
         parser.setArgument_flag("--exclude_subset", "Whether to exclude the subset label "+
@@ -211,6 +211,11 @@ public class Overlord
                                        mscoco_mysqlParams[2], mscoco_mysqlParams[3]);
             } else if(dataset.equals(datasetOpts[1])){
                 conn = new DBConnector(mscoco_sqlite);
+            } else if(dataset.equals(datasetOpts[2])){
+                conn = new DBConnector(flickr30k_sqlite_v1);
+            } else if(dataset.equals(datasetOpts[2]) && runLocal){
+                conn = new DBConnector(flickr30k_mysqlParams[0], flickr30k_mysqlParams[1],
+                        flickr30k_mysqlParams[2], flickr30k_mysqlParams[3] + "_legacy");
             }
 
             boolean reviewedOnly = parser.getBoolean("reviewed_only");
@@ -251,6 +256,504 @@ public class Overlord
             } else if(parser.getBoolean("mod_subset")){
                 Minion.export_modSubsetFeats(docSet, split);
             } else {
+                List<Double> chainsPerImg = new ArrayList<>();
+                List<Double> mentionsPerChain = new ArrayList<>();
+                List<Double> boxesPerImage = new ArrayList();
+                for(Document d : docSet){
+                    chainsPerImg.add((double)d.getChainSet().size());
+                    for(Chain c : d.getChainSet())
+                        if(!c.getMentionSet().isEmpty())
+                            mentionsPerChain.add((double)c.getMentionSet().size());
+                    boxesPerImage.add((double)d.getBoundingBoxSet().size());
+                }
+                System.out.println(StatisticalUtil.getMean(chainsPerImg));
+                System.out.println(StatisticalUtil.getMean(mentionsPerChain));
+                System.out.println(StatisticalUtil.getMean(boxesPerImage));
+
+                System.exit(0);
+
+                Logger.log("Loading v1 data");
+                DBConnector conn = new DBConnector(flickr30k_sqlite_v1);
+                int crossValFlag;
+                switch(split){
+                    case "all": crossValFlag = -1; break;
+                    case "dev": crossValFlag = 0; break;
+                    case "train": crossValFlag = 1; break;
+                    case "test": crossValFlag = 2; break;
+                    default: crossValFlag = -1;
+                }
+                Collection<Document> docSet_v1 = getDocumentSet(conn, crossValFlag, false, -1);
+                Map<String, Integer> predLabelDict = new HashMap<>();
+                for(Document d : docSet_v1){
+                    for(Mention m : d.getMentionList()){
+                        Set<BoundingBox> assocBoxes = d.getBoxSetForMention(m);
+                        for(BoundingBox b : d.getBoundingBoxSet()){
+                            predLabelDict.put(Document.getMentionBoxStr(m, b), assocBoxes.contains(b) ? 1 : 0);
+                        }
+                    }
+                }
+
+                Map<Document, ScoreDict<String>> scoreDict = new HashMap<>();
+                DoubleDict<Document> groundingDict = new DoubleDict<>();
+                Map<String, ScoreDict<String>> scoreDict_byCat = new HashMap<>();
+                DoubleDict<String> catDistro = new DoubleDict<>();
+                for (Document d : docSet) {
+                    List<Mention> mentions = d.getMentionList();
+                    Set<BoundingBox> boxes = d.getBoundingBoxSet();
+                    ScoreDict<String> scores = new ScoreDict<>();
+                    for (Mention m : mentions) {
+                        Set<BoundingBox> assocBoxes = d.getBoxSetForMention(m);
+                        boolean nonvisMention = m.getChainID().equals("0");
+
+                        //if (_usePredictedNonvis)
+                        //    nonvisMention = _nonvisMentions.contains(m.getUniqueID());
+
+                        boolean foundConflictingLink = false;
+                        for (BoundingBox b : boxes) {
+                            int gold = assocBoxes.contains(b) ? 1 : 0;
+
+                            //if this is a nonvisual mention according to
+                            //our scheme, it's always pred 0
+                            int pred = 0;
+                            if (!nonvisMention) {
+                                String id = m.getUniqueID() + "|" + b.getUniqueID();
+                                if (predLabelDict.containsKey(id))
+                                    pred = predLabelDict.get(id);
+                            }
+                            scores.increment(String.valueOf(gold), String.valueOf(pred));
+                            if(gold != pred)
+                                foundConflictingLink = true;
+
+
+                            if(!scoreDict_byCat.containsKey(b.getCategory()))
+                                scoreDict_byCat.put(b.getCategory(), new ScoreDict<>());
+                            scoreDict_byCat.get(b.getCategory()).increment(String.valueOf(gold),
+                                    String.valueOf(pred));
+                            catDistro.increment(b.getCategory());
+                            catDistro.increment("total");
+                        }
+
+                        if(!foundConflictingLink)
+                            groundingDict.increment(d);
+                    }
+                    scoreDict.put(d, scores);
+                }
+
+                //store the micro-averaged accuracies and the macro-averaged scores by bin
+                Map<Integer, List<Double>> accuracies_byEntities = new HashMap<>();
+                Map<Integer, ScoreDict<String>> macroAverage_byEntities = new HashMap<>();
+                ScoreDict<String> macroAverage = new ScoreDict<>();
+                Set<String> labelSet = new HashSet<>();
+                List<Double> accuracies = new ArrayList<>();
+                for(Document d : scoreDict.keySet()){
+                    int numEntities = d.getChainSet().size();
+                    ScoreDict<String> scores = scoreDict.get(d);
+                    macroAverage.increment(scores);
+                    accuracies.add(scores.getAccuracy());
+                    labelSet.addAll(scores.keySet());
+
+                    //bin the accuracy and macro average link counts by entity count
+                    if(!accuracies_byEntities.containsKey(numEntities)) {
+                        accuracies_byEntities.put(numEntities, new ArrayList<>());
+                        macroAverage_byEntities.put(numEntities, new ScoreDict<>());
+                    }
+                    accuracies_byEntities.get(numEntities).add(scores.getAccuracy());
+                    macroAverage_byEntities.get(numEntities).increment(scores);
+                }
+                List<String> labels = new ArrayList<>(labelSet);
+
+                Logger.log("---- Printing macro-averaged scores ----");
+                macroAverage.printCompleteScores();
+
+                List<Integer> entityCounts = new ArrayList<>(accuracies_byEntities.keySet());
+                Collections.sort(entityCounts);
+                //set up our header values
+                List<String> headers = new ArrayList<>();
+                headers.add("entities"); headers.add("doc_freq");
+                headers.add("micro_acc"); headers.add("perfect");
+                headers.add("macro_acc");
+                for(String y : labels){
+                    headers.add("P_" + y); headers.add("R_" + y);
+                    headers.add("F1_" + y); headers.add("gold_links_" + y);
+                }
+                headers.add("total_links");
+
+                //Store these as the columns of an OutTable
+                OutTable ot = new OutTable(headers.toArray(new String[headers.size()]));
+                int perfects_total = 0;
+                for(Integer entityCount : entityCounts){
+                    List<Object> row = new ArrayList<>();
+                    List<Double> acc_byEntityBin = accuracies_byEntities.get(entityCount);
+                    ScoreDict<String> scores = macroAverage_byEntities.get(entityCount);
+
+                    row.add(entityCount);
+                    row.add(acc_byEntityBin.size());
+                    row.add(StatisticalUtil.getMean(acc_byEntityBin) / 100.0);
+                    int perfects = 0;
+                    for(Double acc : acc_byEntityBin)
+                        if(acc == 100)
+                            perfects++;
+                    perfects_total += perfects;
+                    row.add(perfects);
+                    row.add(scores.getAccuracy());
+                    for(String label : labels){
+                        row.add(scores.getScore(label).getPrecision());
+                        row.add(scores.getScore(label).getRecall());
+                        row.add(scores.getScore(label).getF1());
+                        row.add(scores.getGoldCount(label));
+                    }
+                    row.add(scores.getTotalGold());
+                    ot.addRow(row.toArray(new Object[row.size()]));
+                }
+                System.out.printf("Average Image Accuracy: %.2f%%\n",
+                        StatisticalUtil.getMean(accuracies));
+                System.out.printf("Perfects: %d (%.2f%%)\n", perfects_total,
+                        100.0 * (double)perfects_total / (double)docSet.size());
+
+
+                /* We also want to evaluate how often we get groundings perfectly correct */
+                double perfectMentions = groundingDict.getSum();
+                double totalMentions = 0;
+                for(Document d : groundingDict.keySet())
+                    totalMentions += d.getMentionList().size();
+
+                System.out.printf("Found %d (%.2f%%) correctly grounded mentions\n",
+                        (int)perfectMentions, 100.0 * perfectMentions / totalMentions);
+
+
+                /*
+                Map<String, Integer> predLabelDict = new HashMap<>();
+                for(Document d : docSet_v1){
+                    Set<String> subsetMentions = d.getSubsetMentions();
+                    List<Mention> mentions = d.getMentionList();
+                    for(int i=0; i<mentions.size(); i++){
+                        Mention m_i = mentions.get(i);
+                        for(int j=i+1; j<mentions.size(); j++){
+                            Mention m_j = mentions.get(j);
+                            int label_ij = 0;
+                            int label_ji = 0;
+                            String id_ij = Document.getMentionPairStr(m_i, m_j);
+                            String id_ji = Document.getMentionPairStr(m_j, m_i);
+                            if(!m_i.getChainID().equals("0") && !m_j.getChainID().equals("0")){
+                                if(m_i.getChainID().equals(m_j.getChainID())){
+                                    label_ij = 1;
+                                    label_ji = 1;
+                                } else if(subsetMentions.contains(id_ij)){
+                                    label_ij = 2;
+                                    label_ji = 3;
+                                } else if(subsetMentions.contains(id_ji)){
+                                    label_ji = 2;
+                                    label_ij = 3;
+                                }
+                            }
+                            predLabelDict.put(id_ij, label_ij);
+                            predLabelDict.put(id_ji, label_ji);
+                        }
+                    }
+                }
+
+
+                Map<Document, ScoreDict<String>> docScoreDict = new HashMap<>();
+                for(Document d : docSet) {
+                    ScoreDict<String> scores = new ScoreDict<>();
+                    ScoreDict<String> scores_intra = new ScoreDict<>(), scores_inter = new ScoreDict<>();
+                    Set<String> subsetMentions = d.getSubsetMentions();
+                    List<Mention> mentionList = d.getMentionList();
+
+                    for (int i = 0; i < mentionList.size(); i++) {
+                        Mention m_i = mentionList.get(i);
+                        for (int j = i + 1; j < mentionList.size(); j++) {
+                            Mention m_j = mentionList.get(j);
+
+                            String id_ij = Document.getMentionPairStr(m_i, m_j);
+                            String id_ji = Document.getMentionPairStr(m_j, m_i);
+                            boolean nonvisMention = m_i.getChainID().equals("0") || m_j.getChainID().equals("0");
+
+                            String gold = "null";
+                            if(!nonvisMention){
+                                if(m_i.getChainID().equals(m_j.getChainID())){
+                                    gold = "coref";
+                                } else if(subsetMentions.contains(id_ij)) {
+                                    gold = "subset_ij";
+                                } else if(subsetMentions.contains(id_ji)){
+                                    gold = "subset_ji";
+                                }
+                            }
+
+                            String pred = "-invalid-";
+                            if(predLabelDict.containsKey(id_ij) && predLabelDict.containsKey(id_ji)){
+                                int pred_ij = predLabelDict.get(id_ij);
+                                int pred_ji = predLabelDict.get(id_ji);
+                                if(pred_ij == pred_ji && pred_ij == 0){
+                                    pred = "null";
+                                } else if(pred_ij == pred_ji && pred_ij == 1){
+                                    pred = "coref";
+                                }
+                                else if(pred_ij == 2 && pred_ji == 3 ||
+                                        pred_ij == 3 && pred_ji == 2){
+                                    if(pred_ij == 2)
+                                        pred = "subset_ij";
+                                    else
+                                        pred = "subset_ji";
+                                }
+                            }
+
+                            //Handle subset pairs according to whether the direction
+                            //is correct
+                            if(gold.startsWith("subset_") && pred.startsWith("subset_")){
+                                //If both links are subset and their direction matches
+                                //drop the direction (since they're a match)
+                                if(gold.equals(pred)){
+                                    gold = "subset"; pred = "subset";
+                                }
+                                //If both links are subset and their direction does
+                                //_not_ match, drop gold's direction and drop pred's
+                                //label entirely (since they're not a match)
+                                else {
+                                    gold = "subset"; pred = "-reverse_sub-";
+                                }
+                            }
+
+                            //In all other subset cases, drop the direction
+                            if(gold.startsWith("subset_"))
+                                gold = "subset";
+                            if(pred.startsWith("subset_"))
+                                pred = "subset";
+
+                            //Increment the appropriate scores, skipping gold nonvisual pairs
+                            scores.increment(gold, pred);
+                            if(m_i.getCaptionIdx() == m_j.getCaptionIdx())
+                                scores_intra.increment(gold, pred);
+                            else
+                                scores_inter.increment(gold, pred);
+                        }
+                    }
+                    docScoreDict.put(d, scores);
+                }
+
+                Logger.log("----- Overall Scores ------"); //store the micro-averaged accuracies and the macro-averaged scores by bin
+                Map<Integer, List<Double>> accuracies_byEntities = new HashMap<>();
+                Map<Integer, ScoreDict<String>> macroAverage_byEntities = new HashMap<>();
+                ScoreDict<String> macroAverage = new ScoreDict<>();
+                Set<String> labelSet = new HashSet<>();
+                List<Double> accuracies = new ArrayList<>();
+                for(Document d : docScoreDict.keySet()){
+                    int numEntities = d.getChainSet().size();
+                    ScoreDict<String> scores = docScoreDict.get(d);
+                    macroAverage.increment(scores);
+                    accuracies.add(scores.getAccuracy());
+                    labelSet.addAll(scores.keySet());
+
+                    //bin the accuracy and macro average link counts by entity count
+                    if(!accuracies_byEntities.containsKey(numEntities)) {
+                        accuracies_byEntities.put(numEntities, new ArrayList<>());
+                        macroAverage_byEntities.put(numEntities, new ScoreDict<>());
+                    }
+                    accuracies_byEntities.get(numEntities).add(scores.getAccuracy());
+                    macroAverage_byEntities.get(numEntities).increment(scores);
+                }
+                List<String> labels = new ArrayList<>(labelSet);
+
+                Logger.log("---- Printing macro-averaged scores ----");
+                macroAverage.printCompleteScores();
+
+                List<Integer> entityCounts = new ArrayList<>(accuracies_byEntities.keySet());
+                Collections.sort(entityCounts);
+                //set up our header values
+                List<String> headers = new ArrayList<>();
+                headers.add("entities"); headers.add("doc_freq");
+                headers.add("micro_acc"); headers.add("perfect");
+                headers.add("macro_acc");
+                for(String y : labels){
+                    headers.add("P_" + y); headers.add("R_" + y);
+                    headers.add("F1_" + y); headers.add("gold_links_" + y);
+                }
+                headers.add("total_links");
+
+                //Store these as the columns of an OutTable
+                OutTable ot = new OutTable(headers.toArray(new String[headers.size()]));
+                int perfects_total = 0;
+                for(Integer entityCount : entityCounts){
+                    List<Object> row = new ArrayList<>();
+                    List<Double> acc_byEntityBin = accuracies_byEntities.get(entityCount);
+                    ScoreDict<String> scores = macroAverage_byEntities.get(entityCount);
+
+                    row.add(entityCount);
+                    row.add(acc_byEntityBin.size());
+                    row.add(StatisticalUtil.getMean(acc_byEntityBin) / 100.0);
+                    int perfects = 0;
+                    for(Double acc : acc_byEntityBin)
+                        if(acc == 100)
+                            perfects++;
+                    perfects_total += perfects;
+                    row.add(perfects);
+                    row.add(scores.getAccuracy());
+                    for(String label : labels){
+                        row.add(scores.getScore(label).getPrecision());
+                        row.add(scores.getScore(label).getRecall());
+                        row.add(scores.getScore(label).getF1());
+                        row.add(scores.getGoldCount(label));
+                    }
+                    row.add(scores.getTotalGold());
+                    ot.addRow(row.toArray(new Object[row.size()]));
+                }
+                System.out.printf("Average Image Accuracy: %.2f%%\n",
+                        StatisticalUtil.getMean(accuracies));
+                System.out.printf("Perfects: %d (%.2f%%)\n", perfects_total,
+                        100.0 * (double)perfects_total / (double)docSet.size());
+
+                //Additionally, let's evaluate to what the percentage of perfect
+                //entities have been predicted
+                Map<Document, Integer> correctEntityCounts = new HashMap<>();
+                for(Document d : docSet){
+                    int numEntitiesFound = 0;
+                    List<Mention> mentions = d.getMentionList();
+                    Set<String> subsetMentions = d.getSubsetMentions();
+
+                    //An entity is said to be correct when all links to/from all
+                    //mentions within that entity are correct
+                    for(Chain c : d.getChainSet()){
+                        boolean foundConflict = false;
+                        for(Mention m_i : c.getMentionSet()){
+                            for(Mention m_j : mentions){
+                                if(m_i.equals(m_j))
+                                    continue;
+
+                                String id_ij = Document.getMentionPairStr(m_i, m_j);
+                                String id_ji = Document.getMentionPairStr(m_j, m_i);
+
+                                boolean nonvis_j = m_j.getChainID().equals("0");
+
+                                int gold = 0;
+                                if(!nonvis_j){
+                                    if(m_i.getChainID().equals(m_j.getChainID()))
+                                        gold = 1;
+                                    else if(subsetMentions.contains(id_ij))
+                                        gold = 2;
+                                    else if(subsetMentions.contains(id_ji))
+                                        gold = 3;
+                                }
+
+                                int pred = -1;
+                                if(predLabelDict.containsKey(id_ij) && predLabelDict.containsKey(id_ji)){
+                                    int pred_ij = predLabelDict.get(id_ij);
+                                    int pred_ji = predLabelDict.get(id_ji);
+                                    if(pred_ij == pred_ji && pred_ij == 0){
+                                        pred = 0;
+                                    } else if(pred_ij == pred_ji && pred_ij == 1){
+                                        pred = 1;
+                                    } else if(pred_ij == 2 && pred_ji == 3 &&
+                                            pred_ij == 3 && pred_ji == 2){
+                                        if(pred_ij == 2)
+                                            pred = 2;
+                                        else
+                                            pred = 3;
+                                    }
+                                }
+
+                                foundConflict |= gold != pred;
+                            }
+                        }
+
+                        if(!foundConflict)
+                            numEntitiesFound++;
+                    }
+
+                    correctEntityCounts.put(d, numEntitiesFound);
+                }
+
+                double correctEntities = 0.0, totalEntities = 0.0;
+                DoubleDict<String> entityAverages = new DoubleDict<>();
+                for(Document d : correctEntityCounts.keySet()){
+                    correctEntities += correctEntityCounts.get(d);
+                    totalEntities += d.getChainSet().size();
+
+                    double microAverage = (double)correctEntityCounts.get(d) / (double)d.getChainSet().size();
+                    entityAverages.increment(d.getID(), microAverage);
+                }
+
+                System.out.printf("Found %d (%.2f%%) correct entities\n",
+                        (int)correctEntities, 100.0 * correctEntities / totalEntities);
+
+
+
+                */
+                System.exit(0);
+
+
+
+
+
+                Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
+                DoubleDict<String> cocoStats = new DoubleDict<>();
+                for(Document d : docSet){
+                    for(Mention m : d.getMentionList()){
+                        cocoStats.increment("mention_total");
+                        String cocoStr = Mention.getLexicalEntry_cocoCategory(m);
+                        if(cocoStr == null)
+                            cocoStats.increment("no_cat");
+                        else
+                            cocoStats.increment("cat");
+
+                        Set<BoundingBox> assocBoxes = d.getBoxSetForMention(m);
+                        if(assocBoxes.isEmpty())
+                            cocoStats.increment("nobox");
+                        else
+                            cocoStats.increment("box");
+
+                        if(cocoStr != null && !assocBoxes.isEmpty())
+                            cocoStats.increment("cat_box");
+                    }
+                }
+                System.out.println(cocoStats);
+
+
+                System.exit(0);
+
+                _outroot = "/home/ccervan2/data/tacl201801/flickr30k_v1_" + split;
+                Preprocess.export_neuralRelationFiles(docSet, _outroot);
+                System.exit(0);
+                
+                System.out.println(docSet.size());
+
+                DoubleDict<Integer> labelDistro = new DoubleDict<>();
+                for(Document d : docSet){
+                    Set<String> subsetMentions = d.getSubsetMentions();
+                    List<Mention> mentions = d.getMentionList();
+                    double crossEnt = 0.0;
+                    for(int i=0; i<mentions.size(); i++){
+                        Mention m_i = mentions.get(i);
+                        for(int j=i+1; j<mentions.size(); j++){
+                            Mention m_j = mentions.get(j);
+                            String id_ij = Document.getMentionPairStr(m_i, m_j);
+                            String id_ji = Document.getMentionPairStr(m_j, m_i);
+                            int label = 0;
+                            if(!m_i.getChainID().equals("0") && !m_j.getChainID().equals("0")){
+                                if(m_i.getChainID().equals(m_j.getChainID()))
+                                    label = 1;
+                                else if(subsetMentions.contains(id_ij))
+                                    label = 2;
+                                else if(subsetMentions.contains(id_ji))
+                                    label = 3;
+                            }
+                            labelDistro.increment(label);
+                        }
+                    }
+                }
+                System.out.println(labelDistro);
+
+                System.exit(0);
+
+
+                /*
+                double labelTtl = labelDistro.getSum();
+                double crossEntropy = 0.0;
+                for(Integer k : labelDistro.keySet()){
+                    double proba = labelDistro.get(k) / labelTtl;
+                    crossEntropy += proba * Math.log(proba);
+                }
+                System.out.println(-crossEntropy);*/
+                System.exit(0);
 
                 ClassifyUtil.evaluateAffinity_cocoHeuristic(docSet);
                 System.exit(0);
@@ -286,7 +789,7 @@ public class Overlord
                         }
                     }
                 }
-                grndScoreDict.printCompleteScores();;
+                grndScoreDict.printCompleteScores();
                 System.exit(0);
 
 
@@ -461,6 +964,8 @@ public class Overlord
         } else if(argList.contains("Learn")) {
 
         } else if(argList.contains("Infer")) {
+            Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
+
             //Set up the relation inference module
             ILPInference.InferenceType infType =
                     ILPInference.InferenceType.valueOf(parser.getString("inf_type").toUpperCase());

@@ -126,6 +126,25 @@ public class ILPInference
         }
         if(affinityScoresFile != null && cardScoresFile != null){
             _affinityScores = ClassifyUtil.readMccScoresFile(affinityScoresFile);
+
+            for(Document d : _docDict.values()){
+                Set<String> heuristicLinks = d.getHeuristicGroundingIDs();
+                for(Mention m : d.getMentionList()){
+                    for(BoundingBox b : d.getBoundingBoxSet()){
+                        String pairID = Document.getMentionBoxStr(m, b);
+
+                        double[] affinityScores_model = _affinityScores.get(pairID);
+                        double[] affinityScores_heur = {1.0 - Double.MIN_VALUE, Double.MIN_VALUE};
+                        if(heuristicLinks.contains(pairID))
+                            affinityScores_heur = new double[]{Double.MIN_VALUE, 1.0 - Double.MIN_VALUE};
+                        double[] affinityScores_avg = new double[2];
+                        for(int i=0; i<affinityScores_avg.length; i++)
+                            affinityScores_avg[i] = (affinityScores_model[i] + affinityScores_heur[i]) / 2.0;
+                        _affinityScores.put(pairID, affinityScores_avg);
+                    }
+                }
+            }
+
             _cardinalityScores = ClassifyUtil.readMccScoresFile(cardScoresFile);
         }
         Set<String> freqNonvisHeads = new HashSet<>();
@@ -702,10 +721,17 @@ public class ILPInference
                 Logger.log("Exporting htm files");
                 Map<String, Set<Chain[]>> predSubsetChains = getPredictedSubsetChains();
                 for(Document d : _docDict.values()){
+                    String outDir = "out/";
+                    if(InferenceType.isJointType(_infType)) {
+                        outDir += "joint/htm/";
+                    } else if(InferenceType.isRelationType(_infType)){
+                        outDir += "relation/htm/";
+                    } else if(InferenceType.isGroundingType(_infType)){
+                        outDir += "grounding/htm/";
+                    }
                     FileIO.writeFile(HtmlIO.getImgHtm(d, docPredChains.get(d.getID()),
                             predSubsetChains.get(d.getID())),
-                            "out/" + _infType.toString().toLowerCase() + "/htm/" +
-                            d.getID().replace(".jpg", ""), "htm", false);
+                            outDir + d.getID().replace(".jpg", ""), "htm", false);
                 }
             }
             if(InferenceType.isGroundingType(_infType)){
@@ -1263,16 +1289,25 @@ public class ILPInference
     {
         //Add the new graphs to the dictionary and update our saved objects
         if(!_relationGraphs.containsKey(ist.getDocID())){
-            _relationGraphs.put(ist.getDocID(), ist.getRelationGraph());
-            FileIO.writeObject(_relationGraphs, _graphRoot + "_REL.obj");
+            Map<String, Integer> relGraph = ist.getRelationGraph();
+            if(!relGraph.isEmpty()){
+                _relationGraphs.put(ist.getDocID(), relGraph);
+                FileIO.writeObject(_relationGraphs, _graphRoot + "_REL.obj");
+            }
         }
         if(!_groundingGraphs.containsKey(ist.getDocID())) {
-            _groundingGraphs.put(ist.getDocID(), ist.getGroundingGraph());
-            FileIO.writeObject(_groundingGraphs, _graphRoot + "_GRND.obj");
+            Map<String, Integer> grndGraph = ist.getGroundingGraph();
+            if(!grndGraph.isEmpty()){
+                _groundingGraphs.put(ist.getDocID(), grndGraph);
+                FileIO.writeObject(_groundingGraphs, _graphRoot + "_GRND.obj");
+            }
         }
         if(!_visualGraphs.containsKey(ist.getDocID())){
-            _visualGraphs.put(ist.getDocID(), ist.getVisualGraph());
-            FileIO.writeObject(_visualGraphs, _graphRoot + "_VIS.obj");
+            Map<String, Integer> visGraph = ist.getVisualGraph();
+            if(!visGraph.isEmpty()){
+                _visualGraphs.put(ist.getDocID(), visGraph);
+                FileIO.writeObject(_visualGraphs, _graphRoot + "_VIS.obj");
+            }
         }
     }
 
@@ -1302,7 +1337,8 @@ public class ILPInference
         VISUAL_RELATION, VISUAL_GROUNDING, RELATION_GROUNDING,
         VISUAL_RELATION_GROUNDING,
         GROUNDING_THEN_RELATION, GROUNDING_THEN_VISUAL_RELATION,
-        RELATION_THEN_GROUNDING, RELATION_THEN_VISUAL_GROUNDING;
+        RELATION_THEN_GROUNDING, RELATION_THEN_VISUAL_GROUNDING,
+        RELATION_GROUNDING_MERGE;
 
         private static Set<InferenceType> _visualTypes, _relationTypes, _groundingTypes;
         private static Set<InferenceType> _jointTypes; // Types that require inference over
@@ -1315,12 +1351,12 @@ public class ILPInference
 
             InferenceType[] relationTypeArr = {RELATION, VISUAL_RELATION, VISUAL_RELATION_GROUNDING,
                 GROUNDING_THEN_RELATION, GROUNDING_THEN_VISUAL_RELATION, RELATION_GROUNDING,
-                RELATION_THEN_GROUNDING, RELATION_THEN_VISUAL_GROUNDING};
+                RELATION_THEN_GROUNDING, RELATION_THEN_VISUAL_GROUNDING, RELATION_GROUNDING_MERGE};
             _relationTypes = new HashSet<>(Arrays.asList(relationTypeArr));
 
             InferenceType[] groundingTypeArr = {GROUNDING, VISUAL_GROUNDING, VISUAL_RELATION_GROUNDING,
                 GROUNDING_THEN_RELATION, GROUNDING_THEN_VISUAL_RELATION, RELATION_GROUNDING,
-                RELATION_THEN_GROUNDING, RELATION_THEN_VISUAL_GROUNDING};
+                RELATION_THEN_GROUNDING, RELATION_THEN_VISUAL_GROUNDING, RELATION_GROUNDING_MERGE};
             _groundingTypes = new HashSet<>(Arrays.asList(groundingTypeArr));
 
             InferenceType[] jointTypeArr = {VISUAL_RELATION, VISUAL_GROUNDING, RELATION_GROUNDING,
