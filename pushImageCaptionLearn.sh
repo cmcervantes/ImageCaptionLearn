@@ -12,4 +12,5 @@ for staging_dir in ${staging_dirs[@]}; do
     eval "scp ${source_root}*.sh ${dest_root}${staging_dir} >/dev/null"
     eval "scp ${source_root}pom.xml ${dest_root}${staging_dir} >/dev/null"
     eval "scp ${source_root}README ${dest_root}${staging_dir} >/dev/null"
+    eval "scp ${source_root}paths.config ${dest_root}${staging_dir} >/dev/null"
 done

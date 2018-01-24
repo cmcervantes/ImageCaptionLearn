@@ -12,7 +12,6 @@ public class Score
 	protected double _precision;
 	protected double _recall;
 	protected double _f1;
-    protected ScoreType type;
 	
 	/**Empty constructor for child classes
 	 * that use the init workflow instead
@@ -22,9 +21,14 @@ public class Score
         _precision = -1;
         _recall = -1;
         _f1 = -1;
-        type = ScoreType.NONE;
     }
 
+    /**Constructor when we already have a precision
+     * and recall
+     *
+     * @param precision
+     * @param recall
+     */
     public Score(double precision, double recall)
     {
         _precision = precision;
@@ -69,6 +73,10 @@ public class Score
         setF1();
 	}
 
+    /**Initializes a score from a set of scores
+     *
+     * @param scores
+     */
     public Score(Collection<Score> scores)
     {
         double totalPrecision = 0.0;
@@ -96,6 +104,10 @@ public class Score
 		_f1 = (s1._f1 + s2._f1) / 2;
 	}
 
+    /**Sets the F1 value, being mindful of
+     * divide-by-zero F1 values
+     *
+     */
     protected void setF1()
     {
         if(_recall == 0 || _precision == 0)
@@ -108,7 +120,6 @@ public class Score
 	public double getPrecision(){return _precision;}
 	public double getRecall(){return _recall;}
 	public double getF1(){return _f1;}
-    public ScoreType getType(){return type;}
 	
 	/**Returns a score string in the format
 	 * "P: PPP.PP% | R: RRR.RR% | F1: FFF.FF%"
@@ -131,10 +142,5 @@ public class Score
         return String.format("%.2f\\%% & %.2f\\%% & %.2f\\%%",
                              _precision * 100.0, _recall * 100.0,
                              _f1 * 100.0);
-    }
-
-    public enum ScoreType
-    {
-        BLANC, BCUBED, NONE;
     }
 }

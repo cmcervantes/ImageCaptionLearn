@@ -2,12 +2,25 @@ package learn;
 
 import java.util.*;
 
+/**A holdover from when learning took place in Java,
+ * FeatureVectors enable very sparse vectors of
+ * features (think million-entry one-hots) in a
+ * moderately memory-efficient way; the formatting
+ * is borrowed from LibLinear's expected format,
+ * which is
+ *      label idx:val idx:val ... idx:val # comments
+ *
+ * @author ccervantes
+ */
 public class FeatureVector
 {
     private Map<Integer, Double> _featureValueDict;
     public double label;
     public String comments;
 
+    /**Default constructor
+     *
+     */
     public FeatureVector()
     {
         _featureValueDict = new HashMap<>();
@@ -15,6 +28,11 @@ public class FeatureVector
         comments = "";
     }
 
+    /**Initializes this feature vector with
+     * the values from another
+     *
+     * @param fv
+     */
     public FeatureVector(FeatureVector fv)
     {
         _featureValueDict = new HashMap<>();
@@ -24,6 +42,13 @@ public class FeatureVector
         comments = fv.comments;
     }
 
+    /**Creates a feature vector with a given dense list of
+     * numbers
+     *
+     * @param denseVector
+     * @param label
+     * @param comments
+     */
     public FeatureVector(List<Double> denseVector, double label, String comments)
     {
         _featureValueDict = new HashMap<>();
@@ -51,11 +76,20 @@ public class FeatureVector
             addFeature(indices[i], values[i]);
     }
 
+    /**Adds a feature with the given index and value
+     *
+     * @param idx
+     * @param value
+     */
     public void addFeature(int idx, double value)
     {
         _featureValueDict.put(idx, value);
     }
 
+    /**Returns the feature indices that don't have 0 values
+     *
+     * @return
+     */
     public List<Integer> getFeatureIndices()
     {
         List<Integer> indexList = new ArrayList<>(_featureValueDict.keySet());
@@ -63,6 +97,11 @@ public class FeatureVector
         return indexList;
     }
 
+    /**Returns the feature value at the given index
+     *
+     * @param idx
+     * @return
+     */
     public Double getFeatureValue(int idx)
     {
         if(_featureValueDict.containsKey(idx))
@@ -91,6 +130,11 @@ public class FeatureVector
         return fvList;
     }
 
+    /**Returns the string representation of this feature vector
+     *      label idx:val idx:val ... idx:val # comments
+     *
+     * @return
+     */
     @Override
     public String toString()
     {
@@ -123,6 +167,11 @@ public class FeatureVector
         return sb.toString();
     }
 
+    /**Parses a feature vector from a given string
+     *
+     * @param s
+     * @return
+     */
     public static FeatureVector parseFeatureVector(String s)
     {
         FeatureVector fv = new FeatureVector();

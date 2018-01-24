@@ -12,7 +12,10 @@ import java.awt.geom.Area;
 import java.util.*;
 import java.util.function.Function;
 
-public class Minion
+/**Contains miscellaneous functions
+ */
+@Deprecated
+public class Misc
 {
     /**Exports a csv (at given outRoot) where the mentions
      * of the given document have been filtered using the
@@ -195,7 +198,7 @@ public class Minion
     public static void export_hypernymBranches(Collection<Document> docSet, String outRoot,
                                                Set<String> rootConcepts)
     {
-        WordnetUtil wnUtil = new WordnetUtil(Overlord.wordnetDir);
+        WordnetUtil wnUtil = new WordnetUtil(Main.wordnetDir);
         Map<String, List<String>> lemmaBranchDict = new HashMap<>();
         DoubleDict<String> lemmaFreq = new DoubleDict<>();
         DoubleDict<String> hypFreq = new DoubleDict<>();
@@ -428,7 +431,7 @@ public class Minion
                     if(boxes_1.isEmpty() || boxes_2.isEmpty())
                         continue;
 
-                    Set<String> collectives = new HashSet<>(FileIO.readFile_lineList(Overlord.flickr30kResources + "collectiveNouns.txt"));
+                    Set<String> collectives = new HashSet<>(FileIO.readFile_lineList(Main.flickr30kResources + "collectiveNouns.txt"));
                     boolean m1_coll = false;
                     String m1_norm = m1.toString().toLowerCase().trim();
                     for(String coll : collectives){
@@ -737,7 +740,7 @@ public class Minion
         DoubleDict<String> hist_xofy = new DoubleDict<>();
 
         Map<String, String> xCategories = new HashMap<>();
-        String[][] xTable = FileIO.readFile_table(Overlord.dataPath + "xofy_topLemmaX.csv");
+        String[][] xTable = FileIO.readFile_table(Main.dataPath + "xofy_topLemmaX.csv");
         for(String[] row : xTable)
             xCategories.put(row[0], row[2]);
 
@@ -882,7 +885,7 @@ public class Minion
 
     public static void printGroundingStats(Collection<Document> docSet, String dataset)
     {
-        Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
+        Mention.initializeLexicons(Main.flickr30k_lexicon, Main.mscoco_lexicon);
         DoubleDict<String> boxStats = new DoubleDict<>();
         Set<String> newCatEntries = new HashSet<>();
         DoubleDict<String> noboxCatDistro = new DoubleDict<>();
@@ -1060,7 +1063,7 @@ public class Minion
 
     public static void export_cocoCategoryStats_givenBox(Collection<Document> docSet)
     {
-        Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscocoResources + "coco_lex.csv");
+        Mention.initializeLexicons(Main.flickr30k_lexicon, Main.mscocoResources + "coco_lex.csv");
         Set<String> supercategories = Mention.getCOCOSupercategories();
         Set<String> categories = Mention.getCOCOCategories();
 
@@ -1242,7 +1245,7 @@ public class Minion
 
     public static void export_cocoCategoryStats_givenMention(Collection<Document> docSet)
     {
-        Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscocoResources + "coco_lex.csv");
+        Mention.initializeLexicons(Main.flickr30k_lexicon, Main.mscocoResources + "coco_lex.csv");
         Set<String> supercategories = Mention.getCOCOSupercategories();
         Set<String> categories = Mention.getCOCOCategories();
 
@@ -1362,11 +1365,11 @@ public class Minion
      */
     public static void export_cocoCategoryStats_coverage(Collection<Document> docSet)
     {
-        Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscocoResources + "coco_lex.csv");
+        Mention.initializeLexicons(Main.flickr30k_lexicon, Main.mscocoResources + "coco_lex.csv");
         Set<String> categories = Mention.getCOCOCategories();
 
         Set<String> nonvisHeads = new HashSet<>();
-        for(String[] row : FileIO.readFile_table(Overlord.flickr30kResources + "hist_nonvisual.csv")){
+        for(String[] row : FileIO.readFile_table(Main.flickr30kResources + "hist_nonvisual.csv")){
             if(Double.parseDouble(row[1]) > 10){
                 String nonvisHead = row[0].toLowerCase().trim();
                 //We don't want to include any heads that have
@@ -1672,5 +1675,103 @@ public class Minion
         for(int i=0; i<categoryDivergence.size(); i++)
             ot_div.addRow(i*100, supercategoryDivergence.get(i), categoryDivergence.get(i));
         ot_div.writeToCsv("coco_category_divergence", true);
+    }
+
+    public static void compareMpeWithv1()
+    {
+        Logger.log("Loading Flickr30k Entities v1 data");
+        DBConnector conn_v1 = new DBConnector(Main.flickr30k_sqlite_v1);
+        Map<String, Caption> captionDict_v1 = new HashMap<>();
+        for(Document d : DocumentLoader.getDocumentSet(conn_v1, -1))
+            for(Caption c : d.getCaptionList())
+                captionDict_v1.put(c.getUniqueID(), c);
+
+        Logger.log("Loading MPE data");
+        DBConnector conn_mpe = new DBConnector(Main.mpe_sqlite);
+        Map<String, Caption> captionDict_mpe = new HashMap<>();
+        for(Document d : DocumentLoader.getDocumentSet(conn_mpe, -1))
+            for(Caption c : d.getCaptionList())
+                captionDict_mpe.put(c.getUniqueID(), c);
+
+        Logger.log("Mapping captions from MPE to v1");
+        Map<String, String> mpeToV1Dict = new HashMap<>();
+        for(String split : new String[]{"dev", "train", "test"}){
+            List<String> mpeLabelLines =
+                    FileIO.readFile_lineList("/shared/projects/MPE/" + "mpe_" + split + ".txt");
+            for(int i=1; i<mpeLabelLines.size(); i++){
+                String[] mpeLabelArr = mpeLabelLines.get(i).split("\t");
+                String mpeID = mpeLabelArr[0];
+                for(int j=0; j<4; j++)
+                    mpeToV1Dict.put(mpeID + "#" + j, mpeLabelArr[j+1].split("/")[0]);
+            }
+        }
+
+        //First, confirm that all the MPE captions are accounted for
+        int missingIDs = 0, missingCaptions = 0;
+        for(String capID_mpe : captionDict_mpe.keySet()){
+            //Ignore the last captions, because the hypothesis
+            //is the last in the list
+            if(capID_mpe.endsWith("#4"))
+                continue;
+
+            if(!mpeToV1Dict.containsKey(capID_mpe)) {
+                missingIDs++;
+                continue;
+            }
+
+            String capID_v1 = mpeToV1Dict.get(capID_mpe);
+            if(!captionDict_v1.containsKey(capID_v1)){
+                missingCaptions++;
+                continue;
+            }
+        }
+        System.out.printf("Missing IDs:%d; Missing Captions:%d\n",
+                missingIDs, missingCaptions);
+
+        //Of the captions that we can find matches for,
+        //determine how well they match up
+        Logger.log("Computing match statistics");
+        DoubleDict<String> matchStats = new DoubleDict<>();
+        DoubleDict<String> matchStats_mentions = new DoubleDict<>();
+        for(String capID_mpe : captionDict_mpe.keySet()){
+            if(capID_mpe.endsWith("#4"))
+                continue;
+            if(!mpeToV1Dict.containsKey(capID_mpe))
+                continue;
+            String capID_v1 = mpeToV1Dict.get(capID_mpe);
+            if(!captionDict_v1.containsKey(capID_v1))
+                continue;
+
+            matchStats.increment("total_captions");
+
+            Caption cap_mpe = captionDict_mpe.get(capID_mpe);
+            Caption cap_v1 = captionDict_v1.get(capID_v1);
+            if(cap_mpe.getTokenList().size() == cap_v1.getTokenList().size())
+                matchStats.increment("eq_n_tokens");
+            else
+                matchStats.increment("ineq_n_tokens");
+
+            if(cap_mpe.getMentionList().size() == cap_v1.getMentionList().size()) {
+                matchStats.increment("eq_n_mentions");
+                for(int i=0; i<cap_mpe.getMentionList().size(); i++){
+                    Mention m_mpe = cap_mpe.getMentionList().get(i);
+                    Mention m_v1 = cap_v1.getMentionList().get(i);
+                    matchStats_mentions.increment("mentions");
+                    if(m_mpe.toString().equals(m_v1.toString()))
+                        matchStats_mentions.increment("eq_mention_str");
+                    else
+                        matchStats_mentions.increment("ineq_mention_str");
+                }
+            } else
+                matchStats.increment("ineq_n_mentions");
+
+            if(cap_mpe.getChunkList().size() == cap_v1.getChunkList().size())
+                matchStats.increment("eq_n_chunks");
+            else
+                matchStats.increment("ineq_n_chunks");
+        }
+        matchStats.printPercentageDict("total_captions");
+        matchStats_mentions.printPercentageDict("mentions");
+
     }
 }

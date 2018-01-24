@@ -28,7 +28,7 @@
                  <configuration>
                      <archive>
                          <manifest>
-                             <mainClass>core.Overlord</mainClass>
+                             <mainClass>core.Main</mainClass>
                          </manifest>
                      </archive>
                      <descriptorRefs>
@@ -84,7 +84,7 @@
                  <configuration>
                      <archive>
                          <manifest>
-                             <mainClass>core.Overlord</mainClass>
+                             <mainClass>core.Main</mainClass>
                          </manifest>
                      </archive>
                  </configuration>

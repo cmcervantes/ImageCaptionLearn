@@ -1,6 +1,6 @@
 package learn;
 
-import core.Overlord;
+import core.Main;
 import nlptools.StanfordAnnotator;
 import nlptools.Word2VecUtil;
 import nlptools.WordnetUtil;
@@ -12,7 +12,16 @@ import utilities.*;
 import java.io.*;
 import java.util.*;
 
-public abstract class ClassifyUtil {
+/**ClassifyUtil covers everything that isn't explicitly
+ * covered as part of the ImageCaption inference procedure
+ * or part of the preprocessing steps, from reading
+ * scores files to performing heuristic attribute attachment;
+ * It's first and primary function is the creation of feature
+ * files
+ *
+ * @author ccervantes
+ */
+public class ClassifyUtil {
     private static final int UNK = 0;
     private static final int FALSE = 0;
     private static final int TRUE = 1;
@@ -20,6 +29,7 @@ public abstract class ClassifyUtil {
     protected static String _outroot;
     protected static final String PTRN_APPOS = "^NP , (NP (VP |ADJP |PP |and )*)+,.*$";
     protected static final String PTRN_LIST = "^NP , (NP ,?)* and NP.*$";
+    protected static final String PTRN_ASIDE = "^NP , (NP (VP |ADJP |PP |and )*)+,.*$";
 
     /* Static collections used by subordinate threads */
     protected static Map<String, DoubleDict<String>> _imgLemmaCountDict;
@@ -77,8 +87,6 @@ public abstract class ClassifyUtil {
     private static Map<String, Integer> _distances;
 
 
-    protected static final String pattern_aside = "^NP , (NP (VP |ADJP |PP |and )*)+,.*$";
-
     /**Loads a onehot index dictionary given a histogram file and a frequency cutoff;
      * specifying 1, for example, loads the dictionary with all entries which have frequency
      * greater than 1.
@@ -110,33 +118,33 @@ public abstract class ClassifyUtil {
      */
     private static void _featurePreprocessing(Collection<Document> docSet)
     {
-        Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
+        Mention.initializeLexicons(Main.flickr30k_lexicon, Main.mscoco_lexicon);
 
         Logger.log("Feature preprocessing (onehot index dictionaries)");
-        //_typePairs = loadOnehotDict(Overlord.flickr30kResources + "hist_typePair_ordered.csv", 1000);
-        _leftPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_leftPair_ordered.csv", 1000);
-        _rightPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_rightPair_ordered.csv", 1000);
-        _headPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_headPair_ordered.csv", 1);
-        _lemmaPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_lemmaPair_ordered.csv", 1);
-        _subjOfPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_subjOfPair_ordered.csv", 1);
-        _objOfPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_objOfPair_ordered.csv", 1);
-        _modifierPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_modifierPair.csv", 1);
-        _numericPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_numericModifierPair.csv", 1);
-        _prepositionPairs = loadOnehotDict(Overlord.flickr30kResources + "hist_prepositionPair.csv", 1);
-        _heads = loadOnehotDict(Overlord.flickr30kResources + "hist_head.csv", 1);
-        _modifiers = loadOnehotDict(Overlord.flickr30kResources + "hist_modifier.csv", 1);
-        _numerics = loadOnehotDict(Overlord.flickr30kResources + "hist_numericModifier.csv", 1);
-        _prepositions = loadOnehotDict(Overlord.flickr30kResources + "hist_preposition.csv", 1);
-        //_types = loadOnehotDict(Overlord.flickr30kResources + "hist_type.csv", 1000);
-        _lefts = loadOnehotDict(Overlord.flickr30kResources + "hist_left.csv", 1000);
-        _rights = loadOnehotDict(Overlord.flickr30kResources + "hist_right.csv", 1000);
-        _subjOfs = loadOnehotDict(Overlord.flickr30kResources + "hist_subjOf.csv", 1);
-        _objOfs = loadOnehotDict(Overlord.flickr30kResources + "hist_objOf.csv", 1);
-        _pronouns = loadOnehotDict(Overlord.flickr30kResources + "hist_pronoun.csv", 1);
-        _pronounTypes = loadOnehotDict(Overlord.flickr30kResources + "hist_pronounType.csv", 0);
-        _nonvisuals = loadOnehotDict(Overlord.flickr30kResources + "hist_nonvisual.csv", 1);
-        //_categories = loadOnehotDict(Overlord.mscocoResources + "hist_cocoCategory.csv", 1000);
-        //_categoryPairs = loadOnehotDict(Overlord.mscocoResources + "hist_cocoCategoryPair.csv", 1000);
+        //_typePairs = loadOnehotDict(Main.flickr30kResources + "hist_typePair_ordered.csv", 1000);
+        _leftPairs = loadOnehotDict(Main.flickr30kResources + "hist_leftPair_ordered.csv", 1000);
+        _rightPairs = loadOnehotDict(Main.flickr30kResources + "hist_rightPair_ordered.csv", 1000);
+        _headPairs = loadOnehotDict(Main.flickr30kResources + "hist_headPair_ordered.csv", 1);
+        _lemmaPairs = loadOnehotDict(Main.flickr30kResources + "hist_lemmaPair_ordered.csv", 1);
+        _subjOfPairs = loadOnehotDict(Main.flickr30kResources + "hist_subjOfPair_ordered.csv", 1);
+        _objOfPairs = loadOnehotDict(Main.flickr30kResources + "hist_objOfPair_ordered.csv", 1);
+        _modifierPairs = loadOnehotDict(Main.flickr30kResources + "hist_modifierPair.csv", 1);
+        _numericPairs = loadOnehotDict(Main.flickr30kResources + "hist_numericModifierPair.csv", 1);
+        _prepositionPairs = loadOnehotDict(Main.flickr30kResources + "hist_prepositionPair.csv", 1);
+        _heads = loadOnehotDict(Main.flickr30kResources + "hist_head.csv", 1);
+        _modifiers = loadOnehotDict(Main.flickr30kResources + "hist_modifier.csv", 1);
+        _numerics = loadOnehotDict(Main.flickr30kResources + "hist_numericModifier.csv", 1);
+        _prepositions = loadOnehotDict(Main.flickr30kResources + "hist_preposition.csv", 1);
+        //_types = loadOnehotDict(Main.flickr30kResources + "hist_type.csv", 1000);
+        _lefts = loadOnehotDict(Main.flickr30kResources + "hist_left.csv", 1000);
+        _rights = loadOnehotDict(Main.flickr30kResources + "hist_right.csv", 1000);
+        _subjOfs = loadOnehotDict(Main.flickr30kResources + "hist_subjOf.csv", 1);
+        _objOfs = loadOnehotDict(Main.flickr30kResources + "hist_objOf.csv", 1);
+        _pronouns = loadOnehotDict(Main.flickr30kResources + "hist_pronoun.csv", 1);
+        _pronounTypes = loadOnehotDict(Main.flickr30kResources + "hist_pronounType.csv", 0);
+        _nonvisuals = loadOnehotDict(Main.flickr30kResources + "hist_nonvisual.csv", 1);
+        //_categories = loadOnehotDict(Main.mscocoResources + "hist_cocoCategory.csv", 1000);
+        //_categoryPairs = loadOnehotDict(Main.mscocoResources + "hist_cocoCategoryPair.csv", 1000);
         _categories = new HashMap<>();
         List<String> catList = new ArrayList<>(Mention.getCOCOCategories());
         Collections.sort(catList);
@@ -150,16 +158,16 @@ public abstract class ClassifyUtil {
             _types.put(typeList.get(i), i);
 
         _hypernyms = new ArrayList<>();
-        for(String[] row : FileIO.readFile_table(Overlord.flickr30kResources + "hist_hypernym.csv"))
+        for(String[] row : FileIO.readFile_table(Main.flickr30kResources + "hist_hypernym.csv"))
             _hypernyms.add(row[0]);
 
         //read other from files
-        _colors = new HashSet<>(FileIO.readFile_lineList(Overlord.flickr30kResources + "colors.txt"));
-        _stopWords = new HashSet<>(FileIO.readFile_lineList(Overlord.flickr30kResources + "stop_words.txt"));
+        _colors = new HashSet<>(FileIO.readFile_lineList(Main.flickr30kResources + "colors.txt"));
+        _stopWords = new HashSet<>(FileIO.readFile_lineList(Main.flickr30kResources + "stop_words.txt"));
         List<String> dets = new ArrayList<>();
         _detSet_singular = new HashSet<>();
         _detSet_plural = new HashSet<>();
-        String[][] detTable = FileIO.readFile_table(Overlord.flickr30kResources + "dets.csv");
+        String[][] detTable = FileIO.readFile_table(Main.flickr30kResources + "dets.csv");
         for (String[] row : detTable) {
             if (row.length > 1) {
                 dets.add(row[0]);
@@ -281,7 +289,7 @@ public abstract class ClassifyUtil {
 
         Logger.log("Feature preprocessing (hypernyms)");
         _hypDict = new HashMap<>();
-        WordnetUtil wnUtil = new WordnetUtil(Overlord.wordnetDir);
+        WordnetUtil wnUtil = new WordnetUtil(Main.wordnetDir);
         for(Document d : docSet){
             for(Mention m : d.getMentionList()){
                 String lemma = m.getHead().getLemma().toLowerCase();
@@ -302,7 +310,7 @@ public abstract class ClassifyUtil {
                         "dirt", "corn", "liquid", "wine"}));
         _collectives = new HashSet<>(
                 FileIO.readFile_lineList(
-                        Overlord.flickr30kResources + "collectiveNouns.txt", true));
+                        Main.flickr30kResources + "collectiveNouns.txt", true));
         _portions = new HashSet<>(Arrays.asList(
                 new String[]{"pile", "sheet", "puddle", "mound",
                         "spray", "loaf", "cloud", "drink",
@@ -330,7 +338,6 @@ public abstract class ClassifyUtil {
             _distances.put(String.valueOf(i), i);
         _distances.put(">10", 11);
     }
-
 
 
     /**Exports relation features to outroot.feats, using the given collection of
@@ -781,7 +788,7 @@ public abstract class ClassifyUtil {
      */
     public static void evaluateNonvis(Collection<Document> docSet, String nonvisScoresFile)
     {
-        String nonvisHistFile = Overlord.flickr30kResources + "hist_nonvisual.csv";
+        String nonvisHistFile = Main.flickr30kResources + "hist_nonvisual.csv";
         Logger.log("Loading frequent nonvisual head words from " + nonvisHistFile);
         Set<String> freqNonvisHeads = loadOnehotDict(nonvisHistFile, 10).keySet();
 
@@ -833,8 +840,8 @@ public abstract class ClassifyUtil {
                                              boolean strictHeuristic)
     {
         Logger.log("Initializing lexicons");
-        Mention.initializeLexicons(Overlord.flickr30k_lexicon,
-                Overlord.mscoco_lexicon);
+        Mention.initializeLexicons(Main.flickr30k_lexicon,
+                Main.mscoco_lexicon);
 
         Logger.log("Loading predicted affinity score dict from " + affinityScoresFile);
         Map<String, double[]> affinityScores =
@@ -917,9 +924,14 @@ public abstract class ClassifyUtil {
                 100.0 * perfectDict.get("mentions_model") / perfectDict.get("mentions"));
     }
 
+    /**Evaluates the performance of the COCO category heuristic on the
+     * given document set's groundings
+     *
+     * @param docSet
+     */
     public static void evaluateAffinity_cocoHeuristic(Collection<Document> docSet)
     {
-        Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
+        Mention.initializeLexicons(Main.flickr30k_lexicon, Main.mscoco_lexicon);
         ScoreDict<Integer> scoreDict = new ScoreDict<>();
         int perfectImgs = 0;
         int perfectMentions = 0;
@@ -956,6 +968,12 @@ public abstract class ClassifyUtil {
         scoreDict.printCompleteScores();
     }
 
+    /**Uses the stanford annotation pipeline on the given docSet to perform
+     * coreference and exports the results as CONLL files to be evaluates
+     * by the appropriate scripts
+     *
+     * @param docSet
+     */
     public static void exportStanfordCorefConll(Collection<Document> docSet)
     {
         Logger.log("Initializing Stanford Annotation object");
@@ -993,7 +1011,11 @@ public abstract class ClassifyUtil {
         }
     }
 
-
+    /**Exports the predicted pronominal coreference chains as CONLL files
+     *
+     * @param docSet
+     * @param predictPronom
+     */
     public static void exportPronomConll(Collection<Document> docSet, boolean predictPronom)
     {
         String outDir = "out/pronom/";
@@ -1016,6 +1038,105 @@ public abstract class ClassifyUtil {
         }
     }
 
+    /**Exports multiple-premise-entailment files
+     *
+     * @param docSet
+     * @param relationScores
+     * @param numInfThreads
+     * @param premisInf
+     * @param outroot
+     */
+    public static void exportFeatures_mpe(Collection<Document> docSet, String relationScores,
+                                          int numInfThreads, boolean premisInf, String outroot)
+    {
+        String[] labels = {"contradiction", "neutral", "entailment"};
+
+        Logger.log("Initializing lexicons");
+        Mention.initializeLexicons(Main.flickr30k_lexicon, Main.mscoco_lexicon);
+
+        Logger.log("----- Inference -----");
+        ILPInference.InferenceType infType = ILPInference.InferenceType.RELATION;
+        ILPInference inf = new ILPInference(docSet, infType, null, relationScores,
+                null, null, null, false, false, false, false);
+        if(premisInf)
+            inf.infer_fixedPremise(numInfThreads);
+        else
+            inf.infer(numInfThreads);
+        Map<String, Set<Chain>> predChainDict = inf.getPredictedChains();
+
+        Logger.log("----- Computing Features -----");
+        Set<FeatureVector> mpeFeatures = new HashSet<>();
+        for(Document d : docSet){
+            FeatureVector fv = new FeatureVector();
+            int currentIdx = 1;
+            fv.label = ArrayUtils.indexOf(labels, StringUtil.keyValStrToDict(d.comments).get("label"));
+            fv.comments = d.getID();
+
+            //Grab the hypothesis caption, since we need it so often
+            Caption hypothesis = d.getCaption(4);
+            List<Mention> hypothesisMentions = hypothesis.getMentionList();
+
+            //for each chain, grab the set of captions from which
+            //that chain's mentions originate
+            Set<Chain> predChains = predChainDict.get(d.getID());
+            Map<String, Set<Integer>> predChainCaps = new HashMap<>();
+            Map<Mention, String> firstMentionChains = new HashMap<>();
+            for(Chain c : predChains){
+                predChainCaps.put(c.getID(), new HashSet<>());
+                for(Mention m : c.getMentionSet()) {
+                    predChainCaps.get(c.getID()).add(m.getCaptionIdx());
+                    if(m.getIdx() == 0)
+                        firstMentionChains.put(m, c.getID());
+                }
+            }
+
+            //get the percentage of mentions in the hypothesis
+            //for which we found an entity (coreferent mention)
+            double corefCoverage = 0.0;
+            for(Mention m : hypothesisMentions)
+                if(predChainCaps.containsKey(m.getChainID()) && predChainCaps.get(m.getChainID()).size() > 1)
+                    corefCoverage++;
+            corefCoverage /= hypothesisMentions.size();
+            fv.addFeature(currentIdx++, corefCoverage);
+
+            //Is the first mention in the hypothesis predicted
+            //coref with any first mentions in the premises
+            boolean corefSubject = false, commonVerb = false;
+            if(hypothesisMentions.size() > 0 &&
+               firstMentionChains.containsKey(hypothesisMentions.get(0))){
+                String hypSubjChain = firstMentionChains.get(hypothesisMentions.get(0));
+                String hypVerb = "";
+                for(Chunk ch : hypothesis.getChunkList()){
+                    if(ch.getChunkType().equals("VP")){
+                        for(Token t : ch.getTokenList())
+                            hypVerb += t.getLemma() + " ";
+                        continue;
+                    }
+                }
+                hypVerb = hypVerb.trim();
+                for(int i=0; i<4; i++) {
+                    Caption premise = d.getCaption(i);
+                    corefSubject |= firstMentionChains.get(premise.getMentionList().get(0)).equals(hypSubjChain);
+                    String premiseVerb = "";
+                    for (Chunk ch : premise.getChunkList()) {
+                        if (ch.getChunkType().equals("VP")) {
+                            for (Token t : ch.getTokenList())
+                                premiseVerb += t.getLemma() + " ";
+                            continue;
+                        }
+                    }
+                    commonVerb |= premiseVerb.trim().equals(hypVerb);
+                }
+            }
+
+            fv.addFeature(currentIdx++, corefSubject ? 1.0 : 0.0);
+            fv.addFeature(currentIdx++, commonVerb ? 1.0 : 0.0);
+            mpeFeatures.add(fv);
+        }
+        FileIO.writeFile(mpeFeatures, outroot, "feats", false);
+    }
+
+
     /**Exports the box-mention affinity features into a single file;
      * all vectors are returned for dev/text, but -- for train --
      * a random sampling of 10 mention-box pairs are given, per mention text
@@ -1028,7 +1149,7 @@ public abstract class ClassifyUtil {
         List<Document> docList = new ArrayList<>(docSet);
 
         Logger.log("Initializing stop words"); //stop words courtesy of http://www.ranks.nl/
-        _stopWords = new HashSet<>(FileIO.readFile_lineList(Overlord.flickr30kResources + "stop_words.txt"));
+        _stopWords = new HashSet<>(FileIO.readFile_lineList(Main.flickr30kResources + "stop_words.txt"));
 
         Logger.log("Reading vocabulary from documents");
         Set<String> vocabulary = new HashSet<>();
@@ -1043,11 +1164,11 @@ public abstract class ClassifyUtil {
         }
 
         Logger.log("Loading Word2Vec for vocabulary");
-        _w2vUtil = new Word2VecUtil(Overlord.word2vecPath, vocabulary);
+        _w2vUtil = new Word2VecUtil(Main.word2vecPath, vocabulary);
 
         Logger.log("Preprocessing documents");
         Set<String> boxFiles = new HashSet<>();
-        File boxDir = new File(Overlord.boxFeatureDir);
+        File boxDir = new File(Main.boxFeatureDir);
         for(File f : boxDir.listFiles())
             if(f.isFile())
                 boxFiles.add(f.getName().replace(".feats", ""));
@@ -1059,7 +1180,7 @@ public abstract class ClassifyUtil {
             List<String> ll_types = new ArrayList<>();
             int docIdx = 0;
             for(Document d : docList){
-                List<String> ll_fvStr = FileIO.readFile_lineList(Overlord.boxFeatureDir + d.getID().replace(".jpg", ".feats"));
+                List<String> ll_fvStr = FileIO.readFile_lineList(Main.boxFeatureDir + d.getID().replace(".jpg", ".feats"));
                 Map<String, List<Double>> fvDict = new HashMap<>();
                 for(String fvStr : ll_fvStr){
                     FeatureVector fv = FeatureVector.parseFeatureVector(fvStr);
@@ -1084,11 +1205,11 @@ public abstract class ClassifyUtil {
                 Logger.logStatus("complete (%.2f%%)", 100.0 * (double)docIdx /
                         docSet.size());
             }
-            FileIO.writeFile(ll_types, Overlord.dataPath +
+            FileIO.writeFile(ll_types, Main.dataPath +
                     "feats/affinity_feats_" + dataSplit + "_type", "csv", false);
         }
 
-        FileIO.writeFile(ll_affinity, Overlord.dataPath +
+        FileIO.writeFile(ll_affinity, Main.dataPath +
                 "feats/affinity_feats_" + dataSplit, "feats", false);
     }
 
@@ -1156,7 +1277,7 @@ public abstract class ClassifyUtil {
                 List<Double> feats_img = null;
                 try {
                     BufferedReader br = new BufferedReader(new InputStreamReader(
-                            new FileInputStream(Overlord.boxFeatureDir +
+                            new FileInputStream(Main.boxFeatureDir +
                                     b.getDocID().replace(".jpg", ".feats"))));
                     String nextLine = br.readLine();
                     while (nextLine != null && feats_img == null) {
@@ -1196,7 +1317,7 @@ public abstract class ClassifyUtil {
                 List<Double> feats_img = null;
                 try {
                     BufferedReader br = new BufferedReader(new InputStreamReader(
-                            new FileInputStream(Overlord.boxFeatureDir +
+                            new FileInputStream(Main.boxFeatureDir +
                                     b.getDocID().replace(".jpg", ".feats"))));
                     String nextLine = br.readLine();
                     while (nextLine != null && feats_img == null) {
@@ -1242,12 +1363,12 @@ public abstract class ClassifyUtil {
         Map<Mention, AttrStruct> attributeDict = new HashMap<>();
 
         Logger.log("Loading frequent heads / attribute locations from files");
-        String[][] clothAttrTable = FileIO.readFile_table(Overlord.flickr30kResources + "hist_clothHead.csv");
+        String[][] clothAttrTable = FileIO.readFile_table(Main.flickr30kResources + "hist_clothHead.csv");
         Map<String, String> clothAttrs = new HashMap<>();
         for (String[] row : clothAttrTable)
             if(row.length > 2)
                 clothAttrs.put(row[0], row[1]);
-        String[][] bodypartAttrTable = FileIO.readFile_table(Overlord.flickr30kResources + "hist_bodypartHead.csv");
+        String[][] bodypartAttrTable = FileIO.readFile_table(Main.flickr30kResources + "hist_bodypartHead.csv");
         Map<String, String> bodypartAttrs = new HashMap<>();
         for(String[] row : bodypartAttrTable)
             if(row.length > 2)
@@ -1471,6 +1592,14 @@ public abstract class ClassifyUtil {
         return attributeDict;
     }
 
+    /**Creates an attribute structure
+     *
+     * Deprecating (not pursuing attribute attachment project)
+     *
+     * @param core
+     * @return
+     */
+    @Deprecated
     private static AttrStruct _toAttrStruct(Annotation core) {
         AttrStruct attr = new AttrStruct(core);
         String text = null;
@@ -1503,6 +1632,18 @@ public abstract class ClassifyUtil {
         return attr;
     }
 
+    /**Given a list of mentions in a caption, collapses mentions
+     * into constructions, as needed in the case when attachments must be made
+     * globally, rather than locallly (e.g. "A man and a woman hold hands"; hands
+     * attaches to both people)
+     *
+     * Deprecating (not pursuing attribute attachment project)
+     *
+     * @param mentionList
+     * @param caption
+     * @return
+     */
+    @Deprecated
     public static List<List<Mention>>
     collapseMentionListToConstructionList(List<Mention> mentionList, Caption caption) {
         String[] allowedConjArr = {",", "and", ", and", "on and"};
@@ -1562,6 +1703,16 @@ public abstract class ClassifyUtil {
         return end+1;
     }
 
+    /**Adds the given items to the feature vector as an N-hot vector
+     *
+     * @param items
+     * @param fv
+     * @param idxOffset
+     * @param idxDict
+     * @param featName
+     * @param metaDict
+     * @return
+     */
     private static int _addNHotVector(String[] items, FeatureVector fv,
                                       int idxOffset, Map<String, Integer> idxDict,
                                       String featName, Map<String, Object> metaDict)

@@ -1,9 +1,10 @@
 package learn;
 
 import core.DocumentLoader;
-import core.Overlord;
+import core.Main;
 import nlptools.IllinoisAnnotator;
 import nlptools.WordnetUtil;
+import org.apache.commons.lang.ArrayUtils;
 import structures.*;
 import utilities.*;
 
@@ -13,10 +14,12 @@ import java.io.FileInputStream;
 import java.io.InputStreamReader;
 import java.util.*;
 
-import static core.Overlord.flickr30k_lexicon;
-import static core.Overlord.mscoco_lexicon;
+import static core.Main.flickr30k_lexicon;
+import static core.Main.mscoco_lexicon;
 
-/**
+/**Preprocessing functions typically generate files
+ * for use with ImageCaptionLearn_py
+ *
  * @author ccervantes
  */
 public class Preprocess
@@ -375,10 +378,15 @@ public class Preprocess
                     i, 100.0 * labelDistro.get(i) / labelDistro.getSum());
     }
 
+    /**Exports a file associating mention / box pairs with their affinity label
+     *
+     * @param docSet
+     * @param outroot
+     */
     public static void export_neuralAffinityFiles(Collection<Document> docSet, String outroot)
     {
         Logger.log("Initializing lexicons");
-        Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
+        Mention.initializeLexicons(Main.flickr30k_lexicon, Main.mscoco_lexicon);
         List<String> cocoCats = new ArrayList<>(Mention.getCOCOCategories());
         Collections.sort(cocoCats);
 
@@ -416,6 +424,29 @@ public class Preprocess
         for(int i=0; i<boxLabelHist.size(); i++)
             System.out.printf("%d: %.2f%%\n",
                     i, 100.0 * boxLabelHist.get(i) / boxLabelHist.getSum());
+    }
+
+    /**Exports a file associating document IDs with the MPE label
+     *
+     * @param docSet
+     * @param outroot
+     */
+    public static void export_neuralMPEFile(Collection<Document> docSet, String outroot)
+    {
+        String[] labels = {"contradiction", "neutral", "entailment"};
+        List<String> ll_mpeLines = new ArrayList<>();
+        DoubleDict<String> labelDistro = new DoubleDict<>();
+        for(Document d : docSet){
+            Map<String, String> commentDict = StringUtil.keyValStrToDict(d.comments);
+            String label = commentDict.get("label");
+            ll_mpeLines.add(d.getID() + "\t" + ArrayUtils.indexOf(labels, label));
+            labelDistro.increment(label);
+            labelDistro.increment("total");
+        }
+        FileIO.writeFile(ll_mpeLines, outroot + "_idx", "txt", false);
+
+        Logger.log("Label Distribution");
+        labelDistro.printPercentageDict("total");
     }
 
     /***** Phrase Localization Functions ****/
@@ -570,7 +601,7 @@ public class Preprocess
 
         //Read stop words
         Set<String> stopWords =
-                new HashSet<>(FileIO.readFile_lineList(Overlord.flickr30kResources +
+                new HashSet<>(FileIO.readFile_lineList(Main.flickr30kResources +
                         "stop_words.txt"));
 
         //Store a mapping of [docID -> [mention -> [bounding boxes] ] ]
@@ -751,7 +782,7 @@ public class Preprocess
 
         //Read stop words
         Set<String> stopWords =
-                new HashSet<>(FileIO.readFile_lineList(Overlord.flickr30kResources +
+                new HashSet<>(FileIO.readFile_lineList(Main.flickr30kResources +
                         "stop_words.txt"));
 
         //Store a mapping of [docID -> [mention -> [bounding boxes] ] ]
@@ -1032,7 +1063,7 @@ public class Preprocess
      */
     public static void export_hypernyms(Collection<Document> docSet)
     {
-        WordnetUtil wnUtil = new WordnetUtil(Overlord.wordnetDir);
+        WordnetUtil wnUtil = new WordnetUtil(Main.wordnetDir);
         DoubleDict<String> hypDict = new DoubleDict<>();
         DoubleDict<String> hypPairDict = new DoubleDict<>();
         Map<String, Set<String>> lemmaHypDict = new HashMap<>();
@@ -1103,6 +1134,10 @@ public class Preprocess
         FileIO.writeFile(nonvisHist, "hist_nonvisual", "csv", false);
     }
 
+    /**Exports coco category histogram files (to generate one-hots, etc.)
+     *
+     * @param docSet
+     */
     public static void export_categories(Collection<Document> docSet)
     {
         Mention.initializeLexicons(flickr30k_lexicon, mscoco_lexicon);
@@ -1211,14 +1246,14 @@ public class Preprocess
         Logger.log("Loading documents from coref file");
         Collection<Document> docSet_coref = DocumentLoader.getDocumentSet(
                 corefFile,
-                flickr30k_lexicon, Overlord.flickr30kResources);
+                flickr30k_lexicon, Main.flickr30kResources);
         Map<String, Document> docDict_coref = new HashMap<>();
         docSet_coref.forEach(d -> docDict_coref.put(d.getID(), d));
 
         Logger.log("Loading documents from flickr30kEntities file");
         Collection<Document> docSet_flickr =
                 DocumentLoader.getDocumentSet(releaseDir,
-                        Overlord.flickr30kResources);
+                        Main.flickr30kResources);
         Map<String, Document> docDict_flickr = new HashMap<>();
         docSet_flickr.forEach(d -> docDict_flickr.put(d.getID(), d));
 
@@ -1311,7 +1346,7 @@ public class Preprocess
     {
         Map<String, String> xofyTypeDict = new HashMap<>();
         String[][] xofyTable =
-                FileIO.readFile_table(Overlord.mscocoResources +
+                FileIO.readFile_table(Main.mscocoResources +
                         "hist_xofy_lemmas_coco_20170423.csv");
         for(int i=1; i<xofyTable.length; i++){
             String[] row = xofyTable[i];
@@ -1510,10 +1545,10 @@ public class Preprocess
                                               DBConnector conn)
     {
         /*
-        String posDir = Overlord.dataPath + "pos/";
-        String chunkDir = Overlord.dataPath + "chunk/";
-        String cocoData = Overlord.mscocoPath + "coco_caps.txt";
-        String corefFile = Overlord.mscocoPath + "coco_caps.coref";
+        String posDir = Main.dataPath + "pos/";
+        String chunkDir = Main.dataPath + "chunk/";
+        String cocoData = Main.mscocoPath + "coco_caps.txt";
+        String corefFile = Main.mscocoPath + "coco_caps.coref";
         */
 
         Logger.log("Parsing raw captions for .coref file");
@@ -1547,7 +1582,7 @@ public class Preprocess
     {
         Mention.initializeLexicons(flickr30k_lexicon, null);
         Caption.initLemmatizer();
-        Cardinality.initCardLists(Overlord.flickr30kResources +
+        Cardinality.initCardLists(Main.flickr30kResources +
                 "collectiveNouns.txt");
 
         Logger.log("Loading Denotation Graph Generation's MSCOCO captions");
@@ -1568,10 +1603,10 @@ public class Preprocess
         for(Caption c : captions_mod)
             ll_newCaps.add(c.toCorefString(true));
         FileIO.writeFile(ll_newCaps,
-                Overlord.mscocoPath + "coco_caps", "coref", true);
+                Main.mscocoPath + "coco_caps", "coref", true);
 
         Logger.log("Importing into DB");
-        importCocoData(Overlord.mscocoPath + "coco_caps_" +
+        importCocoData(Main.mscocoPath + "coco_caps_" +
                 Util.getCurrentDateTime("yyyMMdd") + ".coref", conn);
     }
 
@@ -1583,18 +1618,18 @@ public class Preprocess
     public static void importCocoData(String corefFile, DBConnector conn)
     {
         /*
-        DBConnector conn = new DBConnector(Overlord.mscocoPath +
+        DBConnector conn = new DBConnector(Main.mscocoPath +
                 "COCO_" + Util.getCurrentDateTime("yyyyMMdd") + ".db");
-        DBConnector conn = new DBConnector(Overlord.flickr30k_mysqlParams[0],
-                Overlord.flickr30k_mysqlParams[1], Overlord.flickr30k_mysqlParams[2],
+        DBConnector conn = new DBConnector(Main.flickr30k_mysqlParams[0],
+                Main.flickr30k_mysqlParams[1], Main.flickr30k_mysqlParams[2],
                 "ccervan2_coco");
         */
 
         Logger.log("Constructing document objects from files");
         Collection<Document> docSet =
                 DocumentLoader.getDocumentSet(corefFile,
-                        Overlord.mscocoPath + "coco_bbox.csv", Overlord.mscocoPath + "coco_imgs.txt",
-                        flickr30k_lexicon, Overlord.flickr30kResources);
+                        Main.mscocoPath + "coco_bbox.csv", Main.mscocoPath + "coco_imgs.txt",
+                        flickr30k_lexicon, Main.flickr30kResources);
         try{
             DocumentLoader.populateDocumentDB(conn, docSet, 100000, 1);
         } catch(Exception ex){
@@ -1603,4 +1638,137 @@ public class Preprocess
         Logger.log("MSCOCO written to " +
                 conn.getDBType().toString().toLowerCase() + " database");
     }
+
+
+    /***** MPE File-to-Database Functions ****/
+
+    /**Reads MPE data files (coref file and three mpe label files in the given
+     * dir) and imports that data -- as documents -- into the database specified
+     * by the connector
+     *
+     * @param corefFile
+     * @param mpeDir
+     * @param conn
+     */
+    public static void importMPEData(String corefFile, String mpeDir, DBConnector conn)
+    {
+        Logger.log("Inititalizing Lexicons, lists, etc.");
+        Caption.initLemmatizer();
+        Mention.initializeLexicons(flickr30k_lexicon, mscoco_lexicon);
+        Cardinality.initCardLists(Main.flickr30kResources + "collectiveNouns.txt");
+
+        //Loading the captions from the cap file, which contains
+        //IDs from the MPE dataset, rather than from Flickr30k;
+        //we'll need to remap these afterward
+        Logger.log("Loading captions");
+        Map<String, List<Caption>> docCaptionDict = new HashMap<>();
+        List<String> mpeCorefLines = FileIO.readFile_lineList(corefFile);
+        try {
+            for(String corefLine : mpeCorefLines){
+                String[] lineArr = corefLine.split("\t");
+                String[] idArr = lineArr[0].split("#");
+                String docID = idArr[0];
+                if(!docCaptionDict.containsKey(docID))
+                    docCaptionDict.put(docID, new ArrayList<>());
+                docCaptionDict.get(docID).add(Caption.fromCorefStr(lineArr[1], docID,
+                        docCaptionDict.get(docID).size()));
+            }
+        } catch(Exception ex){
+            Logger.log(ex);
+        }
+
+        Logger.log("Loading Flickr30k Entities v1 data");
+        DBConnector conn_v1 = new DBConnector(Main.flickr30k_sqlite_v1);
+        Map<String, Caption> captionDict_v1 = new HashMap<>();
+        for(Document d : DocumentLoader.getDocumentSet(conn_v1, -1))
+            for(Caption c : d.getCaptionList())
+                captionDict_v1.put(c.getUniqueID(), c);
+
+        Logger.log("Loading mpe labels");
+        String[] splits = {"dev", "train", "test"};
+        Map<String, Integer> docSplitDict = new HashMap<>();
+        Map<String, String> docLabelDict = new HashMap<>();
+        Map<String, String> docIdDict = new HashMap<>();
+        Map<String, String> mpeToV1Dict = new HashMap<>();
+        DoubleDict<String> labelDistro = new DoubleDict<>();
+        for(String split : splits){
+            List<String> mpeLabelLines = FileIO.readFile_lineList(mpeDir + "mpe_" + split + ".txt");
+
+            //skip the first line, which is column headers
+            for(int i=1; i<mpeLabelLines.size(); i++){
+                String[] mpeLabelArr = mpeLabelLines.get(i).split("\t");
+
+                //Since we know each mpe item is sourced from a single image
+                //and images don't get reused, we can grab the doc ID from any
+                //of the premises and map it to the MPE id
+                String mpeID = mpeLabelArr[0];
+                for(int j=0; j<4; j++)
+                    mpeToV1Dict.put(mpeID + "#" + j, mpeLabelArr[j+1].split("/")[0]);
+                docIdDict.put(mpeID, mpeLabelArr[1].split("#")[0]);
+
+                //Get the label off the end of the line
+                String label = mpeLabelArr[mpeLabelArr.length-1];
+                labelDistro.increment(label);
+
+                //Put the cross-val flag and the label in their dictionaries
+                docSplitDict.put(mpeID, ArrayUtils.indexOf(splits, split));
+                docLabelDict.put(mpeID, label);
+            }
+        }
+
+        //Print the label distro as a sanity check
+        double total = labelDistro.getSum();
+        for(String label : labelDistro.keySet())
+            System.out.printf("%s: %.2f%%\n", label, 100.0 * labelDistro.get(label) / total);
+
+        Logger.log("Packaging everything up into Documents");
+        Set<Document> docSet = new HashSet<>();
+        for(String id : docCaptionDict.keySet()){
+            if(!docSplitDict.containsKey(id)){
+                System.out.println("Could not find " + id);
+                for(String idStr : docSplitDict.keySet()){
+                    System.out.println(idStr);
+                    System.exit(0);
+                }
+            }
+
+            // Re-construct the MPE captions with v1 chain IDs,
+            // for the 97.53% of mentions for which we can find matches
+            List<Caption> captions_mpe = docCaptionDict.get(id);
+            for(Caption c_mpe : captions_mpe){
+                // While all premise captions are accounted for in
+                // the v1 data (I checked), the hypotheses aren't
+                if(!mpeToV1Dict.containsKey(c_mpe.getUniqueID()))
+                    continue;
+
+                Caption c_v1 = captionDict_v1.get(mpeToV1Dict.get(c_mpe.getUniqueID()));
+                List<Mention> mentions_mpe = c_mpe.getMentionList();
+                List<Mention> mentions_v1 = c_v1.getMentionList();
+                if(mentions_mpe.size() == mentions_v1.size()){
+                    for(int i=0; i<mentions_mpe.size(); i++){
+                        Mention m_mpe = mentions_mpe.get(i);
+                        Mention m_v1 = mentions_v1.get(i);
+                        if(m_mpe.toString().equals(m_v1.toString())){
+                            m_mpe.setChainID(m_v1.getChainID());
+                        }
+                    }
+                }
+            }
+            Document d  = new Document(id, docCaptionDict.get(id));
+            d.crossVal = docSplitDict.get(id);
+            d.comments = String.format("orig_id:%s;label:%s",
+                    docIdDict.get(id), docLabelDict.get(id));
+            docSet.add(d);
+        }
+
+        Logger.log("Populating database");
+        try{
+            DocumentLoader.populateDocumentDB(conn, docSet, 100000, 1);
+        } catch(Exception ex){
+            utilities.Logger.log(ex);
+        }
+        Logger.log("MPE written to " +
+                conn.getDBType().toString().toLowerCase() + " database");
+    }
+
 }

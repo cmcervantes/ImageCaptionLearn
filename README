@@ -5,12 +5,15 @@ Table of Contents
 2) Build
 3) Usage
 4) Example Workflows
-5) Changelog
+5) Modules
 
 =================================================
 1) Introduction
 =================================================
-TODO: Write an intro
+ImageCaptionLearn is the main module for the Entity-Based Scene Understanding
+project. It contains the functionality necessary for data manipulation,
+preprocessing, feature extraction, and ILP inference over scores produced by
+the models in ImageCaptionLearn_py.
 
 =================================================
 2) Build
@@ -37,15 +40,11 @@ which is executable.
 =================================================
 3) Usage
 =================================================
-ImageCaptionLearn is currently undergoing significant flux (more than usual,
-which is already pretty high) but the current usage can be found below.
-
-*****Usage*****
 ImageCaptionLearn has several modules, each with  their  own  args.  To get more info on a
 particular module, specify the module with --help
 
 positional arguments:
-  {Debug,Data,Learn}
+  {Debug,Data,Infer}
 
 optional arguments:
   -h, --help             show this help message and exit
@@ -54,40 +53,140 @@ optional arguments:
                          (default: 90)
   --out ROOT             Writes output to file with ROOT prefix
   --threads NUM          Uses NUM threads, where applicable (default: 1)
-  --data {train,dev,test,all}
-                         Where applicable, loads only the specified data
+  --data {flickr30k,mscoco,flickr30k_v1,mpe}
+                         Uses the specified dataset (default: flickr30k)
+  --split {train,dev,test,all}
+                         Loads data of the specified cross validation split (or all)
+  --reviewed_only        Loads  only  reviewed  documents   of   the  --data  and  --split
+                         (default: false)
+  --rand_docs NUM        Loads NUM random documents  of  the  given  dataset and cross val
+                         split
+  --local                Runs locally; queries mysqlDB (default: false)
 
-*****Debug*****
+Data
 optional arguments:
   -h, --help             show this help message and exit
-  --heterog_subset       Exports a list of heterog subset pairs
-  --penult_filter        Exports mention pairs for which the penult filter fires
-
-*****Data*****
-optional arguments:
-  -h, --help             show this help message and exit
-  --convert_to_arff PATH
-                         Converts the specified .feats file to .arff format
-  --extractFeats {pairwise,affinity}
+  --extractFeats {relation,affinity,nonvis,card}
                          Extracts features to --out
+  --neuralPreproc {caption,nonvis,relation,card,affinity,mpe}
+                         Exports neural preprocessing files to --out
+  --ccaPreproc {box_files,box_feats,cca_lists}
+                         Exports cca preproeccsing files to --out
+  --boxFeatDir BOXFEATDIR
+                         Box feature directory, used for --ccaPreproc
+  --for_neural           Whether extracted features are  to  be  used  in conjunction with
+                         word embeddings in  a  neural  network  (in  practice,  turns off
+                         various high-dim features)
+  --exclude_subset       Whether to  exclude  the  subset  label  during  relation feature
+                         extraction
+  --buildDB {mysql,sqlite}
+                         Rebuilds the specified database in the default locations
 
-*****Learn*****
+Infer
 optional arguments:
   -h, --help             show this help message and exit
-  --train_file PATH      Training data
-  --model_file PATH      Model file (save to / load from)
-  --learner {weka_multi,liblinear_logistic}
-                         Specifies which training is taking place
-  --batch_size SIZE      Specifies SIZE batches during training
-  --epochs NUM           Specifies NUM epochs
-  --eval_file PATH       Evaluation data
-  --pronom_coref         Evaluate rule-based pronominal coreference resolution
+  --nonvis_scores FILE   Nonvisual scores file; associates  mention  unique IDs with [0,1]
+                         nonvis prediction
+  --relation_scores FILE
+                         Pairwise relation scores file;  associates  mention pair IDs with
+                         [0,1] (n,c,b,p) predictions
+  --affinity_scores FILE
+                         Affinity scores  file;  associates  mention|box  unique  IDs with
+                         [0,1] affinity prediction
+  --cardinality_scores FILE
+                         Cardinality scores  file;  associates  mention  unique  IDs  with
+                         [0,1] (0-10,11+) cardinality prediction
+  --inf_type {visual,relation,grounding,visual_relation,visual_grounding,relation_grounding,
+              visual_relation_grounding,grounding_then_relation,grounding_then_visual_relation,
+              relation_then_grounding,relation_then_visual_grounding,relation_grounding_merge}
+                         Specifies which inference module to use
+  --include_type_constraint
+                         Enables the inference type constraint
+  --exclude_subset       Whether to exclude  the  subset  label  during  relation  / joint
+                         inference
+  --exclude_box_exigence
+                         Whether to exclude the  box  exigence constraint during grounding
+                         / joint inference
+  --only_keep_positive_links
+                         Whether to keep only  positive  links during sequential inference
+                         modes (e.g. grounding_then_relation
+  --export_files         Writes  examples   to   out/coref/htm/   and   conll   files   to
+                         out/coref/conll/
+  --graph_root ROOT      Loads  previous  inference  graphs   from  ROOT_relation.obj  and
+                         ROOT_grounding.obj
+  --alpha NUM            [0,1] alpha value
+
 
 =================================================
 4) Example Workflows
 =================================================
+--- 4a) Preprocessing and Feature Extraction ----
+Neural preprocessing files and feature files are generated in similar ways.
+The dataset (--data) and cross-validation split (--split) are required
+(so we know over which set of documents we're operating), as is a file root
+(--out). For relation features, specifying --threads is recommended, as these
+can take a significant length of time unless documents' features are extracted
+on independent threads. The command for extracting relation features for
+neural classifiers on Flickr30k Entities v2 dev, for example, would be as follows:
+
+<ImgCapLrn> --data=flickr30k --split=dev --threads=24 --out=<some_dir> Data --extractFeats=relation --for_neural
+
+As it happens, however, repeatedly generating features for all datasets, for all subtasks,
+for both neural and linear classifiers (they use slightly different features) is labor intensive.
+Therefore, the exportClassifierFiles.sh script was written to generate all neural preprocessing files
+and all feature files for both Flickr30k Entities v2 and the reviewed portion of
+MSCOCO.
+
+It is also worth noting that, for most tasks, it was necessary to concatenate
+training and dev files from Flickr30k Entities (into trainDev) in order to train
+the models on which test would be evaluated. Similarly, it was necessary to
+concatenate trainDev with MSCOCO train to train the models on which MSCOCO dev
+would be evaluated. Given the number of files, this was also a laborious process.
+Therefore, copyAndCatClassifierFiles.sh was written to handle this process.
+
+--- 4b) Inference ------------------------------
+Entity-Based Scene Understanding inference is a complex undertaking, in part because
+of the four component tasks. The various inference types are listed above (see Usage)
+but the naming convention is as follows:
+-- "visual" indicates the inclusion of visual/nonvisual prediction
+-- "relation" indicates the inclusion of relation prediction
+-- "grounding" indicates the inclusion of grounding
+-- "then" indicates a sequential operation, where the left is performed and then
+   a joint setting is performed, such that the right operation must adhere
+   to the decisions of the left (e.g. "relation_then_grounding" means relation
+   inference is performed and the grounding graph must adhere to the relation
+   decisions)
+The main outlier is "relation_grounding_merge", in which relation and grounding
+are run independently and grounding decisions are propegated along coreference
+and subset links (this was written specifically for MSCOCO).
+
+The arguments for joint inference for Flickr30k Entities v2 would be
+<ImgCapLrn> --threads=24 --data=flickr30k --split=test Infer --relation_scores=<path> --affinity_scores=<path> --cardinality_scores=<path> --inf_type=relation_grounding
+
+The arguments for MSCOCO would be similar, except --reviewed_only would be specified
+(since our database contains all MSCOCO train/dev, not just the 400 reviewed images)
+and the inference module would need --include_type_contraint (which we found to
+be powerful for MSCOCO) and --exclude_box_exigence (which is a constraint for
+Flickr30k Entities v2 that doesn't hold with MSCOCO)
+
 
 =================================================
-5) Changelog
+5) Modules
 =================================================
-
+Though ImageCaptionLearn is organized into several
+modules, this is mostly a historic distinction (from
+when ImageCaptionLearn and ImageCaptionTools were one project)
+    a) core
+        Contains Main -- which is mostly argument parsing --
+        and Misc, which is a file containing all ad-hoc functions
+        needed during development for data analysis and similar
+    b) learn
+        The primary module, learn contains ClassifyUtil - which
+        contains all feature extraction code -- Preprocess -- which
+        produces text files for downstream tasks -- and the
+        ILP inference code for our various Inference types
+    c) out
+        Deprecated helper class for producing CSV files
+    d) statistical
+        Contains ScoreDict and Score objects, which wrap
+        all the evaluation functionality (P/R/F1; confusion matrices, etc.)

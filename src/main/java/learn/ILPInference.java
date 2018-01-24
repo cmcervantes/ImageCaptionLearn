@@ -1,7 +1,7 @@
 package learn;
 
-import core.Minion;
-import core.Overlord;
+import core.Main;
+import core.Misc;
 import org.apache.commons.lang.ArrayUtils;
 import out.OutTable;
 import statistical.ScoreDict;
@@ -59,7 +59,7 @@ public class ILPInference
         //If we're going to use the type constraint, intitialize the lexicons
         _includeTypeConstr = includeTypeConstr;
         if(_includeTypeConstr)
-            Mention.initializeLexicons(Overlord.flickr30k_lexicon, Overlord.mscoco_lexicon);
+            Mention.initializeLexicons(Main.flickr30k_lexicon, Main.mscoco_lexicon);
 
         //Store the simple vars
         _onlyKeepPositiveLinks = onlyKeepPositiveLinks;
@@ -152,7 +152,7 @@ public class ILPInference
             //If we're going to predict nonvis mentions, load the head word file
             //for a baseline heuristic comparison
             freqNonvisHeads =
-                    ClassifyUtil.loadOnehotDict(Overlord.flickr30kResources +
+                    ClassifyUtil.loadOnehotDict(Main.flickr30kResources +
                             "hist_nonvisual.csv", 10).keySet();
 
             //Store the nonvis scores only (since this is a binary classifier,
@@ -797,8 +797,8 @@ public class ILPInference
         List<String> chainIds_gold = new ArrayList<>(), chainIds_pred = new ArrayList<>();
         d.getChainSet().forEach(c -> chainIds_gold.add(c.getID()));
         predChains.forEach(c -> chainIds_pred.add(c.getID()));
-        Map<String, String> chainColors_gold = Minion.getLatexColors(chainIds_gold);
-        Map<String, String> chainColors_pred = Minion.getLatexColors(chainIds_pred);
+        Map<String, String> chainColors_gold = Misc.getLatexColors(chainIds_gold);
+        Map<String, String> chainColors_pred = Misc.getLatexColors(chainIds_pred);
 
         //Get a mapping of mentions to predicted chain IDs
         Map<String, String> predMentionChainDict = new HashMap<>();
@@ -844,7 +844,7 @@ public class ILPInference
 
         //Colors may be too distracting for bounding boxes
         //boxes.forEach(b -> boxIds.add("b-"+b.getIdx()));
-        //Map<String, String> boxColors = Minion.getLatexColors(boxIds);
+        //Map<String, String> boxColors = Misc.getLatexColors(boxIds);
 
         List<String> ll_gold = new ArrayList<>(), ll_pred = new ArrayList<>();
         for(Caption c : d.getCaptionList()) {
@@ -1199,6 +1199,64 @@ public class ILPInference
         Logger.log("Fell back to individual inference for %d images", _fallbackImgs.size());
         for(String fallbackImg : _fallbackImgs)
             System.out.println(fallbackImg);
+    }
+
+    public void infer_fixedPremise(int numThreads)
+    {
+        Map<String, Map<String, Integer>> fixedCorefLinks = new HashMap<>();
+        for(String docID : _docDict.keySet()){
+            Document d = _docDict.get(docID);
+            fixedCorefLinks.put(d.getID(), new HashMap<>());
+            List<Mention> premiseMentions = new ArrayList<>();
+            for(int i=0; i<4; i++)
+                premiseMentions.addAll(d.getCaption(i).getMentionList());
+
+            Set<String> subsetMentions = d.getSubsetMentions();
+            for(int i=0; i<premiseMentions.size(); i++){
+                Mention m_i = premiseMentions.get(i);
+
+                for(int j=i+1; j<premiseMentions.size(); j++){
+                    Mention m_j = premiseMentions.get(j);
+                    String id_ij = Document.getMentionPairStr(m_i, m_j);
+                    String id_ji = Document.getMentionPairStr(m_j, m_i);
+
+                    if(!m_i.getChainID().equals("0") && !m_j.getChainID().equals("0")){
+                        if(m_i.getChainID().equals(m_j.getChainID())){
+                            fixedCorefLinks.get(d.getID()).put(id_ij, 1);
+                            fixedCorefLinks.get(d.getID()).put(id_ji, 1);
+                        } else if(subsetMentions.contains(id_ij)){
+                            fixedCorefLinks.get(d.getID()).put(id_ij, 2);
+                            fixedCorefLinks.get(d.getID()).put(id_ji, 3);
+                        } else if(subsetMentions.contains(id_ji)){
+                            fixedCorefLinks.get(d.getID()).put(id_ij, 3);
+                            fixedCorefLinks.get(d.getID()).put(id_ji, 2);
+                        }
+                    } else {
+                        fixedCorefLinks.get(d.getID()).put(id_ij, 0);
+                        fixedCorefLinks.get(d.getID()).put(id_ji, 0);
+                    }
+                }
+            }
+        }
+
+        /*Perform inference, according to our type*/
+        Logger.log("Solving the ILP for " + String.valueOf(_infType) + " inference");
+        Set<String> documentIDs = _docDict.keySet();
+
+        List<String> docIds = new ArrayList<>(documentIDs);
+        docIds.removeAll(_relationGraphs.keySet());
+        docIds.removeAll(_groundingGraphs.keySet());
+        _infer(docIds, fixedCorefLinks, numThreads, 1);
+
+        Map<String, Integer> predLabels_rel = new HashMap<>();
+        Map<String, Integer> predLabels_vis = new HashMap<>();
+        for(Map<String, Integer> labelDict : _relationGraphs.values())
+            labelDict.forEach((k,v) -> predLabels_rel.put(k, v));
+        if(InferenceType.isVisualType(_infType))
+            for(Map<String, Integer> labelDict : _visualGraphs.values())
+                labelDict.forEach((k,v) -> predLabels_vis.put(k, v));
+
+        _predChains = _buildChainsFromPredLabels(predLabels_rel, predLabels_vis);
     }
 
     private void _infer(List<String> docIds, Map<String, Map<String, Integer>> fixedLinks,

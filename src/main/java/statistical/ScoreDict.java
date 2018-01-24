@@ -8,6 +8,17 @@ import utilities.StringUtil;
 
 import java.util.*;
 
+/**ScoreDict wraps the process of scoring our models'
+ * predictions into an easy object that we can
+ * increment every time we have a gold/pred pair.
+ * Additional functions allow for the printing
+ * of accuracy, RMSE, confusion matrices, along
+ * with the typical P/R/F1
+ *
+ * @param <K> : Type of label that's going to be accounted for
+ *
+ * @author ccervantes
+ */
 public class ScoreDict<K>
 {
     private DoubleDict<K> _goldDict;
@@ -18,6 +29,9 @@ public class ScoreDict<K>
     private List<Double> _goldList;
     private List<Double> _predList;
 
+    /**Default Constructor
+     *
+     */
     public ScoreDict()
     {
         _goldDict = new DoubleDict<>();
@@ -29,6 +43,11 @@ public class ScoreDict<K>
         _predList = new ArrayList<>();
     }
 
+    /**Adds all of the scores in scores to this
+     * ScoreDict
+     *
+     * @param scores
+     */
     public void increment(ScoreDict<K> scores)
     {
         for(K label : scores._goldDict.keySet())
@@ -48,6 +67,12 @@ public class ScoreDict<K>
         _keySet.addAll(scores._keySet);
     }
 
+    /**Main ScoreDict function, allows for the incrementing
+     * of an item (which has a gold label and a predicted label)
+     *
+     * @param goldLabel
+     * @param predLabel
+     */
     public void increment(K goldLabel, K predLabel)
     {
         _goldDict.increment(goldLabel);
@@ -75,16 +100,36 @@ public class ScoreDict<K>
         }
     }
 
+    /**Returns the gold and predicted labels that have
+     * been given to the ScoreDict up to this point
+     *
+     * @return
+     */
     public Set<K> keySet(){return _keySet;}
 
-    public Score getScore(K key)
+    /**Returns the Score object associated with
+     * the given label
+     *
+     * @param label
+     * @return
+     */
+    public Score getScore(K label)
     {
-        return new Score((int)_predDict.get(key), (int)_goldDict.get(key),
-                (int)_correctDict.get(key));
+        return new Score((int)_predDict.get(label), (int)_goldDict.get(label),
+                (int)_correctDict.get(label));
     }
 
+    /**Returns the number of items with label in the gold
+     *
+     * @param label
+     * @return
+     */
     public int getGoldCount(K label){ return (int)_goldDict.get(label);}
 
+    /**Returns the total number of gold items
+     *
+     * @return
+     */
     public int getTotalGold(){return (int)_goldDict.getSum();}
 
     /**Returns the accuracy of the classifier; recall that in our world
@@ -107,8 +152,15 @@ public class ScoreDict<K>
         return 100.0 * _correctDict.getSum() / _goldDict.getSum();
     }
 
+    /**Returns the root mean squared error
+     *
+     * @return
+     */
     public double getRMSE() {return StatisticalUtil.computeRMSE(_predList, _goldList);}
 
+    /**Prints this ScoreDict's confusion matrix
+     *
+     */
     public void printConfusionMatrix()
     {
         List<List<String>> matrix = new ArrayList<>();

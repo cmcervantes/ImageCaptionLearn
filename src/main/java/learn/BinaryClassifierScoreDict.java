@@ -5,6 +5,14 @@ import structures.Mention;
 import utilities.DoubleDict;
 import utilities.FileIO;
 
+/**A special case of the DoubleDict, the BinaryClassifierScoreDict
+ * simply wraps the retrieval of mention pair scores
+ * by enabling the use of mention pairs directly;
+ * Deprecating
+ *
+ * @author ccervantes
+ */
+@Deprecated
 public class BinaryClassifierScoreDict extends DoubleDict<String>
 {
     /**Loads the score dict from <b>scoreFile</b>, assuming
